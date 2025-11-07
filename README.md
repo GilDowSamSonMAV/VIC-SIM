@@ -15,7 +15,7 @@ posix-drone-sim/
 │
 ├── docs/
 │   ├── assignmentsv4.1.pdf          # assignment spec
-│   └── architecture_a1.md           # (short explanation for you/TA)
+│   └── architecture_a1.md           # Image/Flow showcasing architecture
 │
 ├── headers/
 │   ├── CMakeLists.txt
@@ -40,10 +40,10 @@ posix-drone-sim/
 │
 ├── .github/
 │   └── workflows/
-│       └── ci.yml                   # simple build check (A1 only)
+│       └── ci.yml                   # simple build check
 │
 ├── CMakeLists.txt                   # root
-├── run.sh                           # build + (later) orchestrate processes
+├── run.sh                           # build
 ├── .gitignore
 ├── README.md
 └── LICENSE

@@ -1,6 +1,7 @@
 add_library(sim_core STATIC
     sim_log.c
     sim_params.c
+    sim_ipc.c
 )
 
 target_link_libraries(sim_core

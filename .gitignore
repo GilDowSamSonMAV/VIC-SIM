@@ -21,3 +21,6 @@ Makefile
 *.swo
 .vscode/
 .idea/
+
+# Ignoring Windows "Mark of the Web" metadata files
+*Zone.Identifier

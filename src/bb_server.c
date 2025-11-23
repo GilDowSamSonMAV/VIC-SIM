@@ -1,10 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <semaphore.h>
 #include <signal.h>
+#include <errno.h>
+#include <sys/select.h>
+#include <fcntl.h>  // open
+
 
 #include "sim_types.h"
 #include "sim_ipc.h"
@@ -15,8 +16,6 @@
 // Crucial integer type used for providing variables that can be 
 // read and written by both the main prog and sign handler
 // without introducing race conditions. 
-// Atomic -> Entire opetation completes before any interruption by sign handler. 
-// Volative -> Ensures no optimization to avoid caching. 
 static volatile sig_atomic_t running = 1; 
 
 // Async-signal-safe SIGINT handler: just flip the running flag
@@ -31,65 +30,64 @@ int main(void)
     sim_log_init("bb_server"); //Not used for now
     signal(SIGINT, handle_sigint);
 
-    // Create/open shared memory
-    int fd = shm_open(SIM_SHM_WORLD, O_CREAT | O_RDWR, 0666);
-    if (fd == -1) {
-        perror("bb_server: shm_open");
+    // Make stderr unbuffered for debugging
+    setbuf(stderr, NULL);
+
+    // Open FIFOs:
+    //  - drone_state : drone -> server (DroneState)
+    //  - drone_cmd   : server -> drone (CommandState)
+    //  - input_cmd   : input -> server (CommandState)
+    fprintf(stderr, "bb_server: opening FIFOs...\n");
+
+    int fd_drone_in = open(SIM_FIFO_DRONE_STATE, O_RDONLY);
+    if (fd_drone_in < 0) {
+        perror("bb_server: open(SIM_FIFO_DRONE_STATE, O_RDONLY)");
         return EXIT_FAILURE;
     }
 
-    // Setting size of fd to match the WorldState struct
-    if (ftruncate(fd, sizeof(WorldState)) == -1) {
-        perror("bb_server: ftruncate");
-        close(fd);
+    int fd_drone_out = open(SIM_FIFO_DRONE_CMD, O_WRONLY);
+    if (fd_drone_out < 0) {
+        perror("bb_server: open(SIM_FIFO_DRONE_CMD, O_WRONLY)");
+        close(fd_drone_in);
         return EXIT_FAILURE;
     }
 
-    // Map the shared memory object into our address space
-    WorldState *world = mmap(NULL, sizeof(WorldState),
-                             PROT_READ | PROT_WRITE,
-                             MAP_SHARED, fd, 0);
-    if (world == MAP_FAILED) {
-        perror("bb_server: mmap");
-        close(fd);
+    int fd_input_in = open(SIM_FIFO_INPUT_CMD, O_RDONLY);
+    if (fd_input_in < 0) {
+        perror("bb_server: open(SIM_FIFO_INPUT_CMD, O_RDONLY)");
+        close(fd_drone_in);
+        close(fd_drone_out);
         return EXIT_FAILURE;
     }
 
-    //  Create/open semaphore
-    sem_t *sem = sem_open(SIM_SEM_WORLD, O_CREAT, 0666, 1);
-    if (sem == SEM_FAILED) {
-        perror("bb_server: sem_open");
-        munmap(world, sizeof(WorldState));
-        close(fd);
-        return EXIT_FAILURE;
-    }
+    fprintf(stderr,
+            "bb_server: FIFOs opened: drone_in=%d drone_out=%d input_in=%d\n",
+            fd_drone_in, fd_drone_out, fd_input_in);
+
+    WorldState world;
 
     // Initialize world state
-    if (sem_wait(sem) == -1) {
-        perror("bb_server: sem_wait (init)");
-        return EXIT_FAILURE;
-    } else {
-        world->drone.x  = 0.0;
-        world->drone.y  = 0.0;
-        world->drone.vx = 0.0;
-        world->drone.vy = 0.0;
+    world.drone.x  = 0.0;
+    world.drone.y  = 0.0;
+    world.drone.vx = 0.0;
+    world.drone.vy = 0.0;
 
-        world->cmd.fx       = 0.0;
-        world->cmd.fy       = 0.0;
-        world->cmd.brake    = 0;
-        world->cmd.reset    = 0;
-        world->cmd.quit     = 0;
-        world->cmd.last_key = 0;
-
-        sem_post(sem);
-    }
+    world.cmd.fx       = 0.0;
+    world.cmd.fy       = 0.0;
+    world.cmd.brake    = 0;
+    world.cmd.reset    = 0;
+    world.cmd.quit     = 0;
+    world.cmd.last_key = 0;
 
     // Init UI and show menu
     ui_init();
+    fprintf(stderr, "bb_server: ui_init() done, entering start menu\n");
 
     int start_sim = 0;
     while (!start_sim && running) { // Handling choices of menu
         int choice = ui_show_start_menu();
+        fprintf(stderr, "bb_server: menu choice=%d (0=Start,1=Instr,2=Quit)\n", choice);
+
         if (choice == UI_MENU_QUIT) {
             running = 0;
         } else if (choice == UI_MENU_INSTRUCTIONS) {
@@ -99,50 +97,119 @@ int main(void)
         }
     }
 
-    // Shutting down properly
-    if (!running) {
+    fprintf(stderr, "bb_server: after menu loop: start_sim=%d running=%d\n",
+            start_sim, running);
+
+    if (!running || !start_sim) {
+        fprintf(stderr, "bb_server: exiting from menu\n");
         ui_shutdown();
-        sem_close(sem);
-        munmap(world, sizeof(WorldState));
-        close(fd);
-        shm_unlink(SIM_SHM_WORLD);
-        sem_unlink(SIM_SEM_WORLD);
+        close(fd_drone_in);
+        close(fd_drone_out);
+        close(fd_input_in);
         return 0;
     }
 
     sim_log_info("bb_server: entering main loop\n");
+    fprintf(stderr, "bb_server: entering main loop\n");
 
-    // Main display loop
+    // Main display + IPC loop (FIFO-based, no shared memory)
     while (running) {
-        WorldState snapshot;
+        fd_set readfds;
+        FD_ZERO(&readfds);
 
-        if (sem_wait(sem) == -1) {
-            perror("bb_server: sem_wait (loop)");
+        FD_SET(fd_drone_in, &readfds);
+        FD_SET(fd_input_in, &readfds);
+
+        int maxfd = (fd_drone_in > fd_input_in) ? fd_drone_in : fd_input_in;
+
+        struct timeval tv;
+        tv.tv_sec  = 0;
+        tv.tv_usec = 33333; // Approx 30 Hz
+
+        int ready = select(maxfd + 1, &readfds, NULL, NULL, &tv);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                // Interrupted by signal (e.g., SIGINT) -> check running flag
+                fprintf(stderr, "bb_server: select interrupted by signal (EINTR)\n");
+                continue;
+            }
+            endwin();
+            perror("bb_server: select");
             break;
         }
-        snapshot = *world;
-        sem_post(sem);
 
-        ui_draw(&snapshot);
+        if (ready > 0) {
+            // Data from drone (updated DroneState)
+            if (FD_ISSET(fd_drone_in, &readfds)) {
+                DroneState ds;
+                ssize_t r = read_full(fd_drone_in, &ds, sizeof(ds));
+                fprintf(stderr, "bb_server: read_full(drone) r=%zd (expected=%zu)\n",
+                        r, sizeof(ds));
 
-        if (snapshot.cmd.quit) {
+                if (r == (ssize_t)sizeof(ds)) {
+                    world.drone = ds;
+                } else if (r == 0) {
+                    // EOF: drone closed its pipe
+                    sim_log_info("bb_server: drone FIFO EOF\n");
+                    fprintf(stderr, "bb_server: drone FIFO EOF, stopping\n");
+                    running = 0;
+                } else if (r < 0) {
+                    endwin();
+                    perror("bb_server: read_full(drone)");
+                    running = 0;
+                }
+            }
+
+            // Data from input (updated CommandState)
+            if (FD_ISSET(fd_input_in, &readfds)) {
+                CommandState cs;
+                ssize_t r = read_full(fd_input_in, &cs, sizeof(cs));
+                fprintf(stderr, "bb_server: read_full(input) r=%zd (expected=%zu)\n",
+                        r, sizeof(cs));
+
+                if (r == (ssize_t)sizeof(cs)) {
+                    world.cmd = cs;
+                    fprintf(stderr,
+                            "bb_server: new cmd: fx=%.2f fy=%.2f brake=%d reset=%d quit=%d last_key=%d\n",
+                            cs.fx, cs.fy, cs.brake, cs.reset, cs.quit, cs.last_key);
+
+                    // Forward latest command to drone so it can update physics
+                    ssize_t w = write_full(fd_drone_out, &cs, sizeof(cs));
+                    fprintf(stderr, "bb_server: write_full(drone) w=%zd (expected=%zu)\n",
+                            w, sizeof(cs));
+                    if (w != (ssize_t)sizeof(cs)) {
+                        endwin();
+                        perror("bb_server: write_full(drone)");
+                        running = 0;
+                    }
+                } else if (r == 0) {
+                    sim_log_info("bb_server: input FIFO EOF\n");
+                    fprintf(stderr, "bb_server: input FIFO EOF, stopping\n");
+                    running = 0;
+                } else if (r < 0) {
+                    endwin();
+                    perror("bb_server: read_full(input)");
+                    running = 0;
+                }
+            }
+        }
+
+        ui_draw(&world);
+
+        if (world.cmd.quit) {
             sim_log_info("bb_server: quit flag set, exiting\n");
+            fprintf(stderr, "bb_server: quit flag set in world.cmd, exiting loop\n");
             break;
         }
-
-        usleep(33333); // Approx 30 Hz
     }
 
     ui_shutdown();
 
-    sem_close(sem);
-    munmap(world, sizeof(WorldState));
-    close(fd);
-
-    // Cleanup shared memory & semaphore
-    shm_unlink(SIM_SHM_WORLD);
-    sem_unlink(SIM_SEM_WORLD);
+    close(fd_drone_in);
+    close(fd_drone_out);
+    close(fd_input_in);
 
     sim_log_info("bb_server: exited\n");
+    fprintf(stderr, "bb_server: exited\n");
     return EXIT_SUCCESS;
 }

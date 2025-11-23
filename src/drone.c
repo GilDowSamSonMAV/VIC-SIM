@@ -1,11 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>     
-#include <fcntl.h>      
-#include <sys/mman.h>   
-#include <semaphore.h>  
 #include <signal.h>    
 #include <sys/types.h>
+#include <sys/select.h>
+#include <errno.h>
+#include <fcntl.h>
 
 #include "sim_types.h"
 #include "sim_ipc.h"
@@ -47,29 +47,19 @@ int main(void)
     sim_log_init("drone"); // Not used yet
     signal(SIGINT, handle_sigint);
 
-    // Open shared memory created by bb_server
-    int fd = shm_open(SIM_SHM_WORLD, O_RDWR, 0666);
-    if (fd == -1) {
-        perror("drone: shm_open");
+    // Open FIFOs:
+    //  - SIM_FIFO_DRONE_STATE : drone -> server (write DroneState)
+    //  - SIM_FIFO_DRONE_CMD   : server -> drone (read CommandState)
+    int fd_state_out = open(SIM_FIFO_DRONE_STATE, O_WRONLY);
+    if (fd_state_out < 0) {
+        perror("drone: open(SIM_FIFO_DRONE_STATE, O_WRONLY)");
         return EXIT_FAILURE;
     }
 
-    // Map the shared WorldState into this process's address space
-    WorldState *world = mmap(NULL, sizeof(WorldState),
-                             PROT_READ | PROT_WRITE,
-                             MAP_SHARED, fd, 0);
-    if (world == MAP_FAILED) {
-        perror("drone: mmap");
-        close(fd);
-        return EXIT_FAILURE;
-    }
-
-    // Open existing global semaphore for synchronized world access
-    sem_t *sem = sem_open(SIM_SEM_WORLD, 0);
-    if (sem == SEM_FAILED) {
-        perror("drone: sem_open");
-        munmap(world, sizeof(WorldState));
-        close(fd);
+    int fd_cmd_in = open(SIM_FIFO_DRONE_CMD, O_RDONLY);
+    if (fd_cmd_in < 0) {
+        perror("drone: open(SIM_FIFO_DRONE_CMD, O_RDONLY)");
+        close(fd_state_out);
         return EXIT_FAILURE;
     }
 
@@ -77,86 +67,94 @@ int main(void)
     const double mass    = SIM_DEFAULT_MASS;     
     const double damping = SIM_DEFAULT_DAMPING;
 
-    // Precompute sleep interval matching the simulation timestep
     unsigned int sleep_us = (unsigned int)(dt * 1e6);
 
     sim_log_info("drone: started (dt=%.3f, M=%.3f, K=%.3f)\n",
                  dt, mass, damping);
 
-    // Main simulation loop: read commands, integrate dynamics, write back state
+    DroneState   d;
+    CommandState c;
+
+    d.x  = 0.0;
+    d.y  = 0.0;
+    d.vx = 0.0;
+    d.vy = 0.0;
+
+    c.fx       = 0.0;
+    c.fy       = 0.0;
+    c.brake    = 0;
+    c.reset    = 0;
+    c.quit     = 0;
+    c.last_key = 0;
+
     while (running) {
-        DroneState   d;
-        CommandState c;
-        int quit_flag  = 0;
-        int reset_flag = 0;
+        // Wait up to dt for a new CommandState from bb_server
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(fd_cmd_in, &readfds);
 
-        // Read a consistent snapshot of drone and command state from shared memory
-        if (sem_wait(sem) == -1) {
-            perror("drone: sem_wait (read)");
-            break;
-        }
-        d          = world->drone;
-        c          = world->cmd;
-        quit_flag  = world->cmd.quit;
-        reset_flag = world->cmd.reset;
-        if (sem_post(sem) == -1) {
-            perror("drone: sem_post (read)");
-            break;
-        }
+        struct timeval tv;
+        tv.tv_sec  = 0;
+        tv.tv_usec = sleep_us;
 
-        // Respect global quit flag set by the input or bb_server
-        if (quit_flag) {
-            sim_log_info("drone: quit flag set, exiting\n");
+        int ready = select(fd_cmd_in + 1, &readfds, NULL, NULL, &tv);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            perror("drone: select");
             break;
         }
 
-        // If reset requested, zero position and velocity once and clear the flag
-        if (reset_flag) {
-            d.x  = 0.0;
-            d.y  = 0.0;
-            d.vx = 0.0;
-            d.vy = 0.0;
-            c.reset = 0;
-        }
-        else{
+        if (ready > 0 && FD_ISSET(fd_cmd_in, &readfds)) {
+            CommandState new_c;
+            ssize_t r = read_full(fd_cmd_in, &new_c, sizeof(new_c));
+            if (r == (ssize_t)sizeof(new_c)) {
+                int reset_edge = (new_c.reset == 1 && c.reset == 0);
+                c = new_c;
 
-        // Compute acceleration from command forces and viscous damping
+                if (c.quit) {
+                    sim_log_info("drone: quit flag set, exiting\n");
+                    break;
+                }
+
+                if (reset_edge) {
+                    d.x  = 0.0;
+                    d.y  = 0.0;
+                    d.vx = 0.0;
+                    d.vy = 0.0;
+                }
+            } else if (r == 0) {
+                sim_log_info("drone: cmd FIFO EOF, exiting\n");
+                break;
+            } else if (r < 0) {
+                perror("drone: read_full(fd_cmd_in)");
+                break;
+            }
+        }
+
         double fx = c.fx;
         double fy = c.fy;
 
         double ax = (fx - damping * d.vx) / mass;
         double ay = (fy - damping * d.vy) / mass;
 
-        // Integrate velocity and position with an explicit Euler step
         d.vx += ax * dt;
         d.vy += ay * dt;
 
         d.x  += d.vx * dt;
         d.y  += d.vy * dt;
-        }
 
         apply_world_bounds(&d);
 
-        // Write updated drone state (and cleared reset flag) back into shared memory
-        if (sem_wait(sem) == -1) {
-            perror("drone: sem_wait (write)");
+        if (write_full(fd_state_out, &d, sizeof(d)) != (ssize_t)sizeof(d)) {
+            perror("drone: write_full(fd_state_out)");
             break;
         }
-        world->drone     = d;
-        world->cmd.reset = c.reset;
-        if (sem_post(sem) == -1) {
-            perror("drone: sem_post (write)");
-            break;
-        }
-        usleep(sleep_us);
     }
 
     sim_log_info("drone: exiting\n");
-
-    // Clean up local handles to the semaphore and shared memory
-    sem_close(sem);
-    munmap(world, sizeof(WorldState));
-    close(fd);
-
+    close(fd_cmd_in);
+    close(fd_state_out);
     return EXIT_SUCCESS;
 }

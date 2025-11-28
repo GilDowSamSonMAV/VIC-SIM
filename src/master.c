@@ -1,47 +1,32 @@
 #include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/stat.h>  // mkfifo, unlink
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "sim_ipc.h"    
-
-// Specification of a child process to spawn from master
-typedef struct {
-    const char *binary;       // e.g. "./drone"
-    int         use_terminal; // 1 = run in separate terminal window
-    const char *term_title;   // optional title
-} ChildSpec;
-
-static int create_fifo(const char *path)
-{
-    // Remove any stale FIFO from previous runs
-    unlink(path);
-    if (mkfifo(path, 0666) == -1) {
-        if (errno == EEXIST) {
-            return 0; // already there, fine
-        }
-        perror("master: mkfifo");
-        fprintf(stderr, "  path = %s\n", path);
-        return -1;
-    }
-    return 0;
-}
+#include "sim_ipc.h"
 
 int main(void)
 {
-    // Create named FIFOs for IPC
-    if (create_fifo(SIM_FIFO_DRONE_CMD)   == -1 ||
-        create_fifo(SIM_FIFO_DRONE_STATE) == -1 ||
-        create_fifo(SIM_FIFO_INPUT_CMD)   == -1) {
-        fprintf(stderr, "master: failed to create FIFOs\n");
+    int pipe_drone_cmd[2];    // bb_server -> drone (CommandState)
+    int pipe_drone_state[2];  // drone -> bb_server (DroneState)
+    int pipe_input_cmd[2];    // input -> bb_server (CommandState)
+
+    if (pipe(pipe_drone_cmd) == -1) {
+        perror("master: pipe_drone_cmd");
+        return EXIT_FAILURE;
+    }
+    if (pipe(pipe_drone_state) == -1) {
+        perror("master: pipe_drone_state");
+        return EXIT_FAILURE;
+    }
+    if (pipe(pipe_input_cmd) == -1) {
+        perror("master: pipe_input_cmd");
         return EXIT_FAILURE;
     }
 
-    // Fork bb_server first -> it will own the world and main UI
+    // bb_server
     pid_t bb_pid = fork();
     if (bb_pid < 0) {
         perror("master: fork bb_server");
@@ -49,75 +34,158 @@ int main(void)
     }
 
     if (bb_pid == 0) {
-        // Child: run bb_server in its own Terminator window
-        //   terminator -T "BB_SERVER" -x ./bb_server
-        char *term_argv[] = {
-            "terminator", "-T", "BB_SERVER", "-x", "./bb_server", NULL
-        };
-        execvp("terminator", term_argv);
+        // Child: bb_server in its own Konsole window
+        // Keep:
+        // pipe_drone_state[0]
+        // pipe_drone_cmd[1]
+        // pipe_input_cmd[0]
 
-        // Fallback: run directly in this terminal if terminator fails
-        char *argv2[] = { "./bb_server", NULL };
-        execvp("./bb_server", argv2);
+        // Close unused ends in this child
+        close(pipe_drone_state[1]);
+        close(pipe_drone_cmd[0]);  
+        close(pipe_input_cmd[1]);  
 
-        perror("master: execvp bb_server");
+
+        char fd_drone_state_in[16];
+        char fd_drone_cmd_out[16];
+        char fd_input_cmd_in[16];
+
+        snprintf(fd_drone_state_in, sizeof(fd_drone_state_in), "%d", pipe_drone_state[0]);
+        snprintf(fd_drone_cmd_out,   sizeof(fd_drone_cmd_out),   "%d", pipe_drone_cmd[1]);
+        snprintf(fd_input_cmd_in,    sizeof(fd_input_cmd_in),    "%d", pipe_input_cmd[0]);
+
+        // Konsole -T "BB_SERVER" -e ./bb_server <fds...>
+        execlp("konsole", "konsole",
+               "-T", "BB_SERVER",
+               "-e", "./bb_server",
+               fd_drone_state_in,
+               fd_drone_cmd_out,
+               fd_input_cmd_in,
+               (char *)NULL);
+
+        // Fallback: run directly if Konsole is unavailable
+        execl("./bb_server", "./bb_server",
+              fd_drone_state_in,
+              fd_drone_cmd_out,
+              fd_input_cmd_in,
+              (char *)NULL);
+
+        perror("master: exec bb_server");
         _exit(EXIT_FAILURE);
     }
 
-    // Define the other simulator processes to launch
-    ChildSpec others[] = {
-        {"./drone",     0,      NULL     },
-        {"./input",     1,      "INPUT"  },
-        {"./obstacles", 0,      NULL     },
-        {"./targets",   0,      NULL     }
-    };
-    const int n_others = (int)(sizeof(others)/sizeof(others[0]));
-    pid_t pids[n_others];
-
-    // Fork and exec each child process
-    for (int i = 0; i < n_others; ++i) {
-        pid_t pid = fork();
-        if (pid < 0) {
-            perror("master: fork");
-            exit(EXIT_FAILURE);
-        }
-
-        if (pid == 0) {
-            if (others[i].use_terminal) {
-                // Run in its own Terminator window:
-                //   terminator -T "<TITLE>" -x ./binary
-                char *term_argv[] = {
-                    "terminator", "-T", (char *)others[i].term_title,
-                    "-x", (char *)others[i].binary,
-                    NULL
-                };
-                execvp("terminator", term_argv);
-            }
-
-            // Fallback: run directly in this terminal
-            char *argv2[] = { (char *)others[i].binary, NULL };
-            execvp(others[i].binary, argv2);
-
-            perror("master: execvp child");
-            _exit(EXIT_FAILURE);
-        }
-
-        pids[i] = pid;
+    // Input
+    pid_t input_pid = fork();
+    if (input_pid < 0) {
+        perror("master: fork input");
+        return EXIT_FAILURE;
     }
 
-    // Wait for all non-bb_server children to finish
-    for (int i = 0; i < n_others; ++i) {
-        int status;
-        (void)waitpid(pids[i], &status, 0);
+    if (input_pid == 0) {
+        // Keep: pipe_input_cmd[1]
+        // Close unused ends
+        close(pipe_input_cmd[0]);
+        close(pipe_drone_cmd[0]);
+        close(pipe_drone_cmd[1]);
+        close(pipe_drone_state[0]);
+        close(pipe_drone_state[1]);
+        
+
+        char fd_cmd_out[16];
+        snprintf(fd_cmd_out, sizeof(fd_cmd_out), "%d", pipe_input_cmd[1]);
+
+        // Konsole -T "INPUT" -e ./input <fd_cmd_out>
+        execlp("konsole", "konsole",
+               "-T", "INPUT",
+               "-e", "./input",
+               fd_cmd_out,
+               (char *)NULL);
+
+        // Fallback: run directly
+        execl("./input", "./input", fd_cmd_out, (char *)NULL);
+
+        perror("master: exec input");
+        _exit(EXIT_FAILURE);
     }
 
-    // Wait for bb_server to terminate
-    (void)waitpid(bb_pid, NULL, 0);
+    // Drone
+    pid_t drone_pid = fork();
+    if (drone_pid < 0) {
+        perror("master: fork drone");
+        return EXIT_FAILURE;
+    }
 
-    // Cleanup FIFOs on exit
-    unlink(SIM_FIFO_DRONE_CMD);
-    unlink(SIM_FIFO_DRONE_STATE);
-    unlink(SIM_FIFO_INPUT_CMD);
+    if (drone_pid == 0) {
+        // Keep
+        // cmd_in: pipe_drone_cmd[0] (read)
+        // state_out: pipe_drone_state[1] (write)
+
+        // Close unused ends
+        close(pipe_drone_cmd[1]);
+        close(pipe_drone_state[0]);
+        close(pipe_input_cmd[0]);
+        close(pipe_input_cmd[1]);
+
+        char fd_cmd_in[16];
+        char fd_state_out[16];
+
+        snprintf(fd_cmd_in,    sizeof(fd_cmd_in),    "%d", pipe_drone_cmd[0]);
+        snprintf(fd_state_out, sizeof(fd_state_out), "%d", pipe_drone_state[1]);
+
+        execl("./drone", "./drone", fd_cmd_in, fd_state_out, (char *)NULL);
+
+        perror("master: exec drone");
+        _exit(EXIT_FAILURE);
+    }
+
+    // Obstacles
+    pid_t obstacles_pid = fork();
+    if (obstacles_pid < 0) {
+        perror("master: fork obstacles");
+        return EXIT_FAILURE;
+    }
+
+    if (obstacles_pid == 0) {
+        // No pipes needed
+        close(pipe_drone_cmd[0]);  close(pipe_drone_cmd[1]);
+        close(pipe_drone_state[0]);close(pipe_drone_state[1]);
+        close(pipe_input_cmd[0]);  close(pipe_input_cmd[1]);
+
+        execl("./obstacles", "./obstacles", (char *)NULL);
+        perror("master: exec obstacles");
+        _exit(EXIT_FAILURE);
+    }
+
+    // Targets
+    pid_t targets_pid = fork();
+    if (targets_pid < 0) {
+        perror("master: fork targets");
+        return EXIT_FAILURE;
+    }
+
+    if (targets_pid == 0) {
+        // No pipes needed
+        close(pipe_drone_cmd[0]);  close(pipe_drone_cmd[1]);
+        close(pipe_drone_state[0]);close(pipe_drone_state[1]);
+        close(pipe_input_cmd[0]);  close(pipe_input_cmd[1]);
+
+        execl("./targets", "./targets", (char *)NULL);
+        perror("master: exec targets");
+        _exit(EXIT_FAILURE);
+    }
+
+    // Close unused pipes
+    close(pipe_drone_cmd[0]);  close(pipe_drone_cmd[1]);
+    close(pipe_drone_state[0]);close(pipe_drone_state[1]);
+    close(pipe_input_cmd[0]);  close(pipe_input_cmd[1]);
+
+    // Wait for children (at least main three)
+    int status;
+    (void)waitpid(drone_pid, &status, 0);
+    (void)waitpid(input_pid, &status, 0);
+    (void)waitpid(bb_pid, &status, 0);
+    (void)waitpid(obstacles_pid, &status, 0);
+    (void)waitpid(targets_pid, &status, 0);
 
     return EXIT_SUCCESS;
 }

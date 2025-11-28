@@ -5,7 +5,7 @@
 #include <curses.h>
 #include <math.h>
 #include <sys/stat.h>
-#include <fcntl.h> 
+#include <fcntl.h>
 
 #include "sim_types.h"
 #include "sim_ipc.h"
@@ -42,8 +42,8 @@ static void draw_ui(const CommandState *cmd)
     mvprintw(2, 0, "Direction pad:");
 
     // PAD: 3x3 box just under the label
-    int pad_y = 3;          
-    int pad_x = 2;        
+    int pad_y = 3;
+    int pad_x = 2;
 
     mvprintw(pad_y + 0, pad_x, "+---+---+---+");
     mvprintw(pad_y + 1, pad_x, "| q | w | e |");
@@ -53,7 +53,6 @@ static void draw_ui(const CommandState *cmd)
     mvprintw(pad_y + 5, pad_x, "| z | x | c |");
     mvprintw(pad_y + 6, pad_x, "+---+---+---+");
 
-    // Highlight positions of letters in that frame
     struct KeyCell { int ch; int y; int x; } cells[] = {
         { 'q', pad_y + 1, pad_x + 2 },
         { 'w', pad_y + 1, pad_x + 6 },
@@ -66,7 +65,6 @@ static void draw_ui(const CommandState *cmd)
         { 'c', pad_y + 5, pad_x +10 },
     };
 
-    // Treat space the same as 's' for highlighting (brake in center)
     int lk = cmd->last_key;
     if (lk == ' ') lk = 's';
 
@@ -78,14 +76,12 @@ static void draw_ui(const CommandState *cmd)
         }
     }
 
-    // Special keys section under the pad
-    int special_y = pad_y + 8;  
+    int special_y = pad_y + 8;
     mvprintw(special_y + 0, 0, "Special:");
     mvprintw(special_y + 1, 2, "s or SPACE = brake (zero force)");
     mvprintw(special_y + 2, 2, "r          = reset drone");
     mvprintw(special_y + 3, 2, "Q          = quit simulation & exit input");
 
-    // Current command state (forces + flags + last key)
     int cmd_y = special_y + 5;
     mvprintw(cmd_y + 0, 0, "Current command:");
     mvprintw(cmd_y + 1, 2, "fx = %6.2f  fy = %6.2f", cmd->fx, cmd->fy);
@@ -99,7 +95,7 @@ static void draw_ui(const CommandState *cmd)
     refresh();
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
     sim_log_init("input");
     signal(SIGINT, handle_sigint);
@@ -109,11 +105,14 @@ int main(void)
 
     setbuf(stderr, NULL);
 
-    int fd_to_srv = open(SIM_FIFO_INPUT_CMD, O_WRONLY);
-    if (fd_to_srv < 0) {
-        perror("input: open(SIM_FIFO_INPUT_CMD, O_WRONLY)");
+    // FDs for anonymous pipes are passed via argv by master:
+    //   ./input <fd_cmd_out>
+    if (argc < 2) {
+        fprintf(stderr, "input: usage: %s <fd_cmd_out>\n", argv[0]);
         return EXIT_FAILURE;
     }
+
+    int fd_to_srv = atoi(argv[SIM_ARG_INPUT_CMD_OUT]);
 
     const double FORCE_STEP = 1.5;
     const double MAX_FORCE  = 15.0;
@@ -206,4 +205,3 @@ int main(void)
     close(fd_to_srv);
     return EXIT_SUCCESS;
 }
-

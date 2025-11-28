@@ -4,8 +4,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <sys/select.h>
-#include <fcntl.h>  // open
-
+#include <fcntl.h>
 
 #include "sim_types.h"
 #include "sim_ipc.h"
@@ -25,7 +24,7 @@ static void handle_sigint(int sig)
     running = 0;
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
     sim_log_init("bb_server"); //Not used for now
     signal(SIGINT, handle_sigint);
@@ -33,35 +32,21 @@ int main(void)
     // Make stderr unbuffered for debugging
     setbuf(stderr, NULL);
 
-    // Open FIFOs:
-    //  - drone_state : drone -> server (DroneState)
-    //  - drone_cmd   : server -> drone (CommandState)
-    //  - input_cmd   : input -> server (CommandState)
-    fprintf(stderr, "bb_server: opening FIFOs...\n");
-
-    int fd_drone_in = open(SIM_FIFO_DRONE_STATE, O_RDONLY);
-    if (fd_drone_in < 0) {
-        perror("bb_server: open(SIM_FIFO_DRONE_STATE, O_RDONLY)");
+    // FDs for anonymous pipes are now passed via argv by master:
+    //   ./bb_server <fd_drone_state_in> <fd_drone_cmd_out> <fd_input_cmd_in>
+    if (argc < 4) {
+        fprintf(stderr,
+                "bb_server: usage: %s <fd_drone_state_in> <fd_drone_cmd_out> <fd_input_cmd_in>\n",
+                argv[0]);
         return EXIT_FAILURE;
     }
 
-    int fd_drone_out = open(SIM_FIFO_DRONE_CMD, O_WRONLY);
-    if (fd_drone_out < 0) {
-        perror("bb_server: open(SIM_FIFO_DRONE_CMD, O_WRONLY)");
-        close(fd_drone_in);
-        return EXIT_FAILURE;
-    }
-
-    int fd_input_in = open(SIM_FIFO_INPUT_CMD, O_RDONLY);
-    if (fd_input_in < 0) {
-        perror("bb_server: open(SIM_FIFO_INPUT_CMD, O_RDONLY)");
-        close(fd_drone_in);
-        close(fd_drone_out);
-        return EXIT_FAILURE;
-    }
+    int fd_drone_in  = atoi(argv[SIM_ARG_BB_DRONE_STATE_IN]);
+    int fd_drone_out = atoi(argv[SIM_ARG_BB_DRONE_CMD_OUT]);
+    int fd_input_in  = atoi(argv[SIM_ARG_BB_INPUT_CMD_IN]);
 
     fprintf(stderr,
-            "bb_server: FIFOs opened: drone_in=%d drone_out=%d input_in=%d\n",
+            "bb_server: pipe FDs: drone_in=%d drone_out=%d input_in=%d\n",
             fd_drone_in, fd_drone_out, fd_input_in);
 
     WorldState world;
@@ -112,7 +97,7 @@ int main(void)
     sim_log_info("bb_server: entering main loop\n");
     fprintf(stderr, "bb_server: entering main loop\n");
 
-    // Main display + IPC loop (FIFO-based, no shared memory)
+    // Main display + IPC loop (pipe-based, no shared memory)
     while (running) {
         fd_set readfds;
         FD_ZERO(&readfds);
@@ -129,7 +114,6 @@ int main(void)
         int ready = select(maxfd + 1, &readfds, NULL, NULL, &tv);
         if (ready < 0) {
             if (errno == EINTR) {
-                // Interrupted by signal (e.g., SIGINT) -> check running flag
                 fprintf(stderr, "bb_server: select interrupted by signal (EINTR)\n");
                 continue;
             }
@@ -150,8 +134,8 @@ int main(void)
                     world.drone = ds;
                 } else if (r == 0) {
                     // EOF: drone closed its pipe
-                    sim_log_info("bb_server: drone FIFO EOF\n");
-                    fprintf(stderr, "bb_server: drone FIFO EOF, stopping\n");
+                    sim_log_info("bb_server: drone pipe EOF\n");
+                    fprintf(stderr, "bb_server: drone pipe EOF, stopping\n");
                     running = 0;
                 } else if (r < 0) {
                     endwin();
@@ -183,8 +167,8 @@ int main(void)
                         running = 0;
                     }
                 } else if (r == 0) {
-                    sim_log_info("bb_server: input FIFO EOF\n");
-                    fprintf(stderr, "bb_server: input FIFO EOF, stopping\n");
+                    sim_log_info("bb_server: input pipe EOF\n");
+                    fprintf(stderr, "bb_server: input pipe EOF, stopping\n");
                     running = 0;
                 } else if (r < 0) {
                     endwin();

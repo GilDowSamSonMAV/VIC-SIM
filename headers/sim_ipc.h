@@ -1,15 +1,8 @@
 /*
     IPC identifiers for the shared WorldState stuct defined in sim_types.h.
 
-    We use a single shared memory segment (SIM_SHM_WORLD) that stores the entire
-    WorldState struct, and a single named semaphore (SIM_SEM_WORLD) as a global
-    mutex to protect access to it.
-
-    Design choice: one semaphore instead of multiple fine-grained ones keeps the
-    concurrency model simple and safe (no lock ordering, no deadlocks), and the
-    cost is negligible for our small world state and update rates.
-
-    Making it more complex is always an option, but we opted for a KISS approach. 
+    SHM/SEM identifiers are kept for compatibility with older phases but are
+    not used in the current pipe-based implementation.
 */
 
 #ifndef SIM_IPC_H
@@ -18,28 +11,35 @@
 #define SIM_SHM_WORLD   "/sim_world_shm"
 #define SIM_SEM_WORLD   "/sim_world_sem"
 
+#include <sys/types.h>
+#include <stddef.h>
 
 /*
-    Phase_Migration: pipe-based IPC support
+    Anonymous pipe FD positions in argv for each process.
 
-    We are gradually moving from shared memory + semaphore to a pipe + select()
-    architecture. To keep the transition smooth, we add pipe-related types and
-    helper functions here, alongside the existing SHM identifiers.
+    master will create all pipes with pipe(), then fork/exec the children
+    and pass the relevant FD numbers as command-line arguments:
 
-    These helpers do not create or open pipes; they just operate on file
-    descriptors that are created in master.c and passed to
-    children.
+      bb_server argv layout:
+        ./bb_server <fd_drone_state_in> <fd_drone_cmd_out> <fd_input_cmd_in>
+
+      drone argv layout:
+        ./drone <fd_cmd_in> <fd_state_out>
+
+      input argv layout:
+        ./input <fd_cmd_out>
 */
 
-#include <sys/types.h>  
-#include <stddef.h>  
+#define SIM_ARG_BB_DRONE_STATE_IN   1
+#define SIM_ARG_BB_DRONE_CMD_OUT    2
+#define SIM_ARG_BB_INPUT_CMD_IN     3
 
-#define SIM_FIFO_DRONE_CMD    "/tmp/sim_fifo_drone_cmd" // bb_server -> drone (CommandState)
-#define SIM_FIFO_DRONE_STATE  "/tmp/sim_fifo_drone_state" // drone -> bb_server (DroneState)
-#define SIM_FIFO_INPUT_CMD    "/tmp/sim_fifo_input_cmd" // input -> bb_server (CommandState)
+#define SIM_ARG_DRONE_CMD_IN        1
+#define SIM_ARG_DRONE_STATE_OUT     2
+
+#define SIM_ARG_INPUT_CMD_OUT       1
 
 // Robust I/O helpers for pipe-based communication.
-// Implemented in src/sim_ipc.c.
 ssize_t read_full(int fd, void *buf, size_t n);
 ssize_t write_full(int fd, const void *buf, size_t n);
 

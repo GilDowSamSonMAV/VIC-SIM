@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>     
-#include <signal.h>    
+#include <unistd.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/select.h>
 #include <errno.h>
@@ -42,29 +42,23 @@ static void apply_world_bounds(DroneState *d)
     }
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
-    sim_log_init("drone"); // Not used yet
+    sim_log_init("drone");
     signal(SIGINT, handle_sigint);
 
-    // Open FIFOs:
-    //  - SIM_FIFO_DRONE_STATE : drone -> server (write DroneState)
-    //  - SIM_FIFO_DRONE_CMD   : server -> drone (read CommandState)
-    int fd_state_out = open(SIM_FIFO_DRONE_STATE, O_WRONLY);
-    if (fd_state_out < 0) {
-        perror("drone: open(SIM_FIFO_DRONE_STATE, O_WRONLY)");
+    // FDs for anonymous pipes are passed via argv by master:
+    //   ./drone <fd_cmd_in> <fd_state_out>
+    if (argc < 3) {
+        fprintf(stderr, "drone: usage: %s <fd_cmd_in> <fd_state_out>\n", argv[0]);
         return EXIT_FAILURE;
     }
 
-    int fd_cmd_in = open(SIM_FIFO_DRONE_CMD, O_RDONLY);
-    if (fd_cmd_in < 0) {
-        perror("drone: open(SIM_FIFO_DRONE_CMD, O_RDONLY)");
-        close(fd_state_out);
-        return EXIT_FAILURE;
-    }
+    int fd_cmd_in    = atoi(argv[SIM_ARG_DRONE_CMD_IN]);
+    int fd_state_out = atoi(argv[SIM_ARG_DRONE_STATE_OUT]);
 
-    const double dt      = SIM_DEFAULT_DT;       
-    const double mass    = SIM_DEFAULT_MASS;     
+    const double dt      = SIM_DEFAULT_DT;
+    const double mass    = SIM_DEFAULT_MASS;
     const double damping = SIM_DEFAULT_DAMPING;
 
     unsigned int sleep_us = (unsigned int)(dt * 1e6);
@@ -125,7 +119,7 @@ int main(void)
                     d.vy = 0.0;
                 }
             } else if (r == 0) {
-                sim_log_info("drone: cmd FIFO EOF, exiting\n");
+                sim_log_info("drone: cmd pipe EOF, exiting\n");
                 break;
             } else if (r < 0) {
                 perror("drone: read_full(fd_cmd_in)");

@@ -1,16 +1,31 @@
 /* 
     Global Simulation const headers. 
     It defines physical model defaults &
-    world geometry. 
+    world geometry in case we have an error in param file. 
 */
 
 #ifndef SIM_CONST_H
 #define SIM_CONST_H
 
+// Drone dynamics
 static const double SIM_DEFAULT_MASS    = 1.0;
 static const double SIM_DEFAULT_DAMPING = 1.0;
 static const double SIM_DEFAULT_DT      = 0.05;
+
+// Window size
 static const double SIM_WORLD_WIDTH     = 50.0;
 static const double SIM_WORLD_HEIGHT    = 50.0;
+
+//User command forces
+static const double SIM_DEFAULT_FORCE_STEP = 1.5; 
+static const double SIM_DEFAULT_MAX_FORCE  = 15.0;
+
+// Repulsion params
+static const double SIM_DEFAULT_RHO    = 5.0;  
+static const double SIM_DEFAULT_ETA    = 1.0;
+
+// Env population
+static const int    SIM_DEFAULT_NUM_OBSTACLES = 20;
+static const int    SIM_DEFAULT_NUM_TARGETS   = 20;
 
 #endif

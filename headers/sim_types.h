@@ -13,6 +13,12 @@
 #ifndef SIM_TYPES_H
 #define SIM_TYPES_H
 
+#include <time.h> 
+
+// Maximum sizes for obstacle/target arrays in WorldState.
+#define SIM_MAX_OBSTACLES 64
+#define SIM_MAX_TARGETS   32
+
 typedef struct {
     double x;
     double y;
@@ -22,17 +28,42 @@ typedef struct {
 
 typedef struct {
     double fx;       
-    double fy;       
+    double fy;      
     int    brake;    
     int    reset;    
     int    quit;     
-    int    last_key; 
+    int    last_key;
 } CommandState;
+
+
+
+typedef struct {
+    double x;       
+    double y;
+    double radius; 
+    int    active;  
+} Obstacle;
+
+typedef struct {
+    double x;       
+    double y;
+    double radius;  
+    int    id;     
+    int    active;  
+    struct timespec time_created;
+} Target;
 
 typedef struct {
     DroneState   drone; 
-    CommandState cmd;   
-    // Add target and obstacles here
+    CommandState cmd; 
+
+    int          num_obstacles;
+    Obstacle     obstacles[SIM_MAX_OBSTACLES];
+
+    int          num_targets;
+    Target       targets[SIM_MAX_TARGETS];
+
+    double       score;
 } WorldState;
 
 #endif

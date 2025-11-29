@@ -11,6 +11,7 @@
 #include "sim_ipc.h"
 #include "sim_const.h"
 #include "sim_log.h"
+#include "sim_params.h"   // runtime parameters (force_step, max_force)
 
 // Flag set by the SIGINT handler to request a clean shutdown
 static volatile sig_atomic_t running = 1;
@@ -105,6 +106,14 @@ int main(int argc, char *argv[])
 
     setbuf(stderr, NULL);
 
+    // Load runtime parameters in this process
+    if (sim_params_load(NULL) != 0) {
+        fprintf(stderr,
+                "input: warning: could not load '%s', using built-in defaults\n",
+                SIM_PARAMS_DEFAULT_PATH);
+    }
+    const SimParams *params = sim_params_get();
+
     // FDs for anonymous pipes are passed via argv by master:
     //   ./input <fd_cmd_out>
     if (argc < 2) {
@@ -114,8 +123,8 @@ int main(int argc, char *argv[])
 
     int fd_to_srv = atoi(argv[SIM_ARG_INPUT_CMD_OUT]);
 
-    const double FORCE_STEP = 1.5;
-    const double MAX_FORCE  = 15.0;
+    const double FORCE_STEP = params->force_step;
+    const double MAX_FORCE  = params->max_force;
     const double INV_SQRT2  = 0.70710678118;
 
     CommandState cmd;

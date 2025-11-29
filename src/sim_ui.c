@@ -7,7 +7,7 @@
 #include "sim_const.h"
 #include "sim_types.h"
 
-// Single map window centered in the terminal
+// Single map window, below the header, centered horizontally
 static WINDOW *map_win = NULL;
 
 // Track last screen size to avoid unnecessary resizes
@@ -27,17 +27,26 @@ static void layout_map_window(void)
     last_screen_h = H;
     last_screen_w = W;
 
-    // Leave some margin around the map area
-    int wh = (H > 6) ? H - 6 : H;
-    int ww = (W > 10) ? W - 10 : W;
+    // Reserve the first 4 rows for header / status lines
+    int header_rows = 4;
+    int bottom_margin = 1;
+
+    int wh = H - header_rows - bottom_margin;
     if (wh < 3) wh = 3;
+
+    int side_margin = 2;
+    int ww = W - 2 * side_margin;
     if (ww < 3) ww = 3;
 
+    int start_y = header_rows;       // map starts just below header
+    int start_x = (W - ww) / 2;
+    if (start_x < 0) start_x = 0;
+
     if (map_win == NULL) {
-        map_win = newwin(wh, ww, (H - wh) / 2, (W - ww) / 2);
+        map_win = newwin(wh, ww, start_y, start_x);
     } else {
         wresize(map_win, wh, ww);
-        mvwin(map_win, (H - wh) / 2, (W - ww) / 2);
+        mvwin(map_win, start_y, start_x);
     }
 }
 
@@ -50,9 +59,9 @@ static void ui_setup_colors(void)
     start_color();
     use_default_colors();
 
-    init_pair(1, COLOR_BLACK, COLOR_CYAN);   
-    init_pair(2, COLOR_YELLOW, -1);          
-    init_pair(3, COLOR_MAGENTA, -1);        
+    init_pair(1, COLOR_BLACK, COLOR_CYAN);   // menu highlight
+    init_pair(2, COLOR_YELLOW, -1);          // normal menu text / obstacles
+    init_pair(3, COLOR_MAGENTA, -1);         // title / targets
 }
 
 // Render the full-screen main menu and return selected option index
@@ -136,7 +145,7 @@ static void show_instructions_internal(void)
         "r = reset drone position",
         "Q = quit simulation",
         "",
-        "This window shows the map & state only.",
+        "This window shows the map, obstacles, and targets.",
         "Resize the terminal to see the window adjust.",
         "",
         "Press any key to return to menu..."
@@ -168,6 +177,7 @@ void ui_init(void)
     werase(stdscr);
     refresh();
 }
+
 // For defs check sim_ui.h 
 void ui_shutdown(void)
 {
@@ -197,10 +207,11 @@ void ui_draw(const WorldState *world)
     int H, W;
     getmaxyx(map_win, H, W);
 
-    werase(stdscr);
+    // Only clear the map window, not the whole screen, to avoid flicker
     werase(map_win);
     box(map_win, 0, 0);
 
+    // Map drone position into world bounds
     double wx = world->drone.x;
     double wy = world->drone.y;
 
@@ -218,7 +229,7 @@ void ui_draw(const WorldState *world)
     if (py < 1) py = 1;
     if (py > H - 2) py = H - 2;
 
-    // Status lines at the top of the main screen
+    // Status lines at the top of the main screen (rows 0..3)
     mvprintw(0, 0, "x=%6.2f y=%6.2f  vx=%6.2f vy=%6.2f",
              world->drone.x, world->drone.y,
              world->drone.vx, world->drone.vy);
@@ -228,7 +239,58 @@ void ui_draw(const WorldState *world)
              world->cmd.brake, world->cmd.reset,
              world->cmd.quit, world->cmd.last_key);
 
-    mvprintw(2, 0, "Press 'Q' in INPUT window to quit");
+    mvprintw(2, 0, "obstacles=%d targets=%d score=%6.2f",
+             world->num_obstacles, world->num_targets, world->score);
+
+    mvprintw(3, 0, "Press 'Q' in INPUT window to quit");
+
+    // Draw obstacles as '#'
+    for (int i = 0; i < world->num_obstacles; ++i) {
+        if (!world->obstacles[i].active)
+            continue;
+
+        double ox = world->obstacles[i].x;
+        double oy = world->obstacles[i].y;
+
+        if (ox < 0.0) ox = 0.0;
+        if (ox > SIM_WORLD_WIDTH)  ox = SIM_WORLD_WIDTH;
+        if (oy < 0.0) oy = 0.0;
+        if (oy > SIM_WORLD_HEIGHT) oy = SIM_WORLD_HEIGHT;
+
+        int opx = 1 + (int)((ox / SIM_WORLD_WIDTH)  * (W - 2));
+        int opy = 1 + (int)((oy / SIM_WORLD_HEIGHT) * (H - 2));
+
+        if (opx < 1 || opx > W - 2 || opy < 1 || opy > H - 2)
+            continue;
+
+        wattron(map_win, COLOR_PAIR(2));
+        mvwaddch(map_win, opy, opx, '#');
+        wattroff(map_win, COLOR_PAIR(2));
+    }
+
+    // Draw targets as '+'
+    for (int i = 0; i < world->num_targets; ++i) {
+        if (!world->targets[i].active)
+            continue;
+
+        double tx = world->targets[i].x;
+        double ty = world->targets[i].y;
+
+        if (tx < 0.0) tx = 0.0;
+        if (tx > SIM_WORLD_WIDTH)  tx = SIM_WORLD_WIDTH;
+        if (ty < 0.0) ty = 0.0;
+        if (ty > SIM_WORLD_HEIGHT) ty = SIM_WORLD_HEIGHT;
+
+        int tpx = 1 + (int)((tx / SIM_WORLD_WIDTH)  * (W - 2));
+        int tpy = 1 + (int)((ty / SIM_WORLD_HEIGHT) * (H - 2));
+
+        if (tpx < 1 || tpx > W - 2 || tpy < 1 || tpy > H - 2)
+            continue;
+
+        wattron(map_win, COLOR_PAIR(3) | A_BOLD);
+        mvwaddch(map_win, tpy, tpx, '+');
+        wattroff(map_win, COLOR_PAIR(3) | A_BOLD);
+    }
 
     // Draw drone symbol at mapped position inside the map window
     mvwaddch(map_win, py, px, '@'); 

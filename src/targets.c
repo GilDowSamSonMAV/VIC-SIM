@@ -1,90 +1,119 @@
-// // Implement targets here
-// #include <math.h>
-// #include <time.h>
-// #include <stdlib.h>
-// #include <string.h>
-// #include <unistd.h>
-// #include <sys/select.h>
+// Targets process.
+// Generates a batch of static targets and sends them once to bb_server
+// via an anonymous pipe. bb_server stores them in WorldState and uses them
+// for drawing / scoring / repulsion in Phase 3.
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <signal.h>
+#include <time.h>
 
-// typedef struct {
-//     float t_x;
-//     float t_y;
-//     int active; 
-//     //we declare a nested structure so we can save the time it was generated
-//     struct timespec time_created;
-// }targets;
+#include "sim_types.h"
+#include "sim_ipc.h"
+#include "sim_params.h"
+#include "sim_log.h"
 
-// typedef struct {
-//     int window_height;
-//     int window_length;
-// }dimensions;
+// Flag set by the SIGINT handler to request a clean shutdown (unused for now)
+static volatile sig_atomic_t running = 1;
 
-// static void generate_targets(int h, int w, int number){
+static void handle_sigint(int sig)
+{
+    (void)sig;
+    running = 0;
+}
 
-//     for (int i = 0; i < number; i++){
-//         targets[i].t_x = 0;
-//     }
-// }
+int main(int argc, char *argv[])
+{
+    sim_log_init("targets");
+    signal(SIGINT, handle_sigint);
 
+    if (argc < 2) {
+        fprintf(stderr, "targets: usage: %s <fd_targets_out>\n", argv[0]);
+        return EXIT_FAILURE;
+    }
 
-// int main(){
+    int fd_tgt_out = atoi(argv[SIM_ARG_TGT_OUT]);
 
-//     dimensions d; 
-//     struct timeval tv;
-//     // we declare the wait for the reading
-//     tv.tv_sec = 20; // 20s timeout
-//     tv.tv_usec = 0;   
+    // Load runtime parameters for targets (world size, counts, etc.)
+    if (sim_params_load(NULL) != 0) {
+        fprintf(stderr,
+                "targets: warning: could not load '%s', using built-in defaults\n",
+                SIM_PARAMS_DEFAULT_PATH);
+    }
 
-//     // variable delcaration
-//     int target_number = 0;
+    const SimParams *params = sim_params_get();
 
-//     // now we declare the targets
-//     targets t[target_number];
+    fprintf(stderr,
+            "targets: started (world=%dx%d, num_targets=%d)\n",
+            params->world_width,
+            params->world_height,
+            params->num_targets);
 
+    int num = params->num_targets;
+    if (num < 0) {
+        num = 0;
+    }
+    if (num > SIM_MAX_TARGETS) {
+        num = SIM_MAX_TARGETS;
+    }
 
-//     // We get the number of targets read by the BB from the parameter file
-//     int f = read(STDERR_FILENO, &target_number, sizeof(int));
-//     if (f < 0){
-//         perror("T: Issue with the first reading");
-//     }
+    Target targets[SIM_MAX_TARGETS];
 
-    
+    // Seed RNG with time and PID to avoid identical maps across runs
+    srand((unsigned)time(NULL) ^ (unsigned)getpid());
 
-//     // the initial read for the window size (we make it blocking bc it doesn't make sense
-//     // to continue without having it)
-//     f = read(STDERR_FILENO, &d, sizeof(d));
-//     if (f < 0){
-//         perror("T: Issue with the second reading");
-//     }
+    // Simple static targets: random positions in the world, fixed radius
+    const double radius = 1.0;
 
-//     // now we make it nonblocking 
-//     int fd = STDIN_FILENO;
-//     fd_set rfd;
-//     FD_ZERO(&rfd);
-//     FD_SET(fd, &rfd);
+    for (int i = 0; i < num; ++i) {
+        double margin = radius;  // keep inside world bounds with a small margin
 
-//     while(1){
-//         // we generate the targets
-//         generate_targets(d.window_height, d.window_length, target_number);
+        double x_range = (double)params->world_width  - 2.0 * margin;
+        double y_range = (double)params->world_height - 2.0 * margin;
+        if (x_range < 0.0) x_range = 0.0;
+        if (y_range < 0.0) y_range = 0.0;
 
+        double rx = (double)rand() / (double)RAND_MAX;
+        double ry = (double)rand() / (double)RAND_MAX;
 
-//         // we check if there is a new window size 
-//         int is_data = select(fd+1, &rfd, NULL, NULL, &tv);
-//         if (is_data > 0){
-//             // the window has been resized
-//             f = read(STDIN_FILENO, &d, sizeof(d));
-//             if (f < 0){
-//                 perror("T: Issue with window resize reading");
-//             }
-//         }
+        targets[i].x      = margin + rx * x_range;
+        targets[i].y      = margin + ry * y_range;
+        targets[i].radius = radius;
+        targets[i].id     = i + 1;
+        targets[i].active = 1;
 
-//         // if there isn't a new window we generate a new batch of 
-//         // targets randomly after 20 seconds
+        clock_gettime(CLOCK_REALTIME, &targets[i].time_created);
+    }
 
-        
-        
-//     }
+    // Mark unused slots as inactive
+    for (int i = num; i < SIM_MAX_TARGETS; ++i) {
+        targets[i].x      = 0.0;
+        targets[i].y      = 0.0;
+        targets[i].radius = 0.0;
+        targets[i].id     = 0;
+        targets[i].active = 0;
+        targets[i].time_created.tv_sec  = 0;
+        targets[i].time_created.tv_nsec = 0;
+    }
 
-//     return 0;
-// }
+    if (num > 0) {
+        ssize_t expected = (ssize_t)(num * (int)sizeof(Target));
+        ssize_t w = write_full(fd_tgt_out, targets,
+                               (size_t)(num * (int)sizeof(Target)));
+        if (w != expected) {
+            perror("targets: write_full(fd_tgt_out)");
+            fprintf(stderr, "targets: write_full returned %zd (expected %zd)\n",
+                    w, expected);
+            close(fd_tgt_out);
+            return EXIT_FAILURE;
+        }
+        fprintf(stderr, "targets: sent %d targets to bb_server\n", num);
+    } else {
+        fprintf(stderr, "targets: num_targets <= 0, nothing sent\n");
+    }
+
+    close(fd_tgt_out);
+    sim_log_info("targets: exiting\n");
+    return EXIT_SUCCESS;
+}

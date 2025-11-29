@@ -11,6 +11,7 @@
 #include "sim_ipc.h"
 #include "sim_const.h"
 #include "sim_log.h"
+#include "sim_params.h"   // runtime parameters (mass, damping, dt)
 
 // Flag set by the SIGINT handler to request a clean shutdown
 static volatile sig_atomic_t running = 1;
@@ -47,6 +48,14 @@ int main(int argc, char *argv[])
     sim_log_init("drone");
     signal(SIGINT, handle_sigint);
 
+    // Load runtime parameters in this process
+    if (sim_params_load(NULL) != 0) {
+        fprintf(stderr,
+                "drone: warning: could not load '%s', using built-in defaults\n",
+                SIM_PARAMS_DEFAULT_PATH);
+    }
+    const SimParams *params = sim_params_get();
+
     // FDs for anonymous pipes are passed via argv by master:
     //   ./drone <fd_cmd_in> <fd_state_out>
     if (argc < 3) {
@@ -57,9 +66,10 @@ int main(int argc, char *argv[])
     int fd_cmd_in    = atoi(argv[SIM_ARG_DRONE_CMD_IN]);
     int fd_state_out = atoi(argv[SIM_ARG_DRONE_STATE_OUT]);
 
-    const double dt      = SIM_DEFAULT_DT;
-    const double mass    = SIM_DEFAULT_MASS;
-    const double damping = SIM_DEFAULT_DAMPING;
+    // Use dt, mass, damping from parameter file (or defaults)
+    const double dt      = params->dt;
+    const double mass    = params->mass;
+    const double damping = params->damping;
 
     unsigned int sleep_us = (unsigned int)(dt * 1e6);
 

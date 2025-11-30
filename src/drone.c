@@ -6,12 +6,13 @@
 #include <sys/select.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>        // fabs for motion deadzone
 
 #include "sim_types.h"
 #include "sim_ipc.h"
 #include "sim_const.h"
 #include "sim_log.h"
-#include "sim_params.h"   // runtime parameters (mass, damping, dt)
+#include "sim_params.h"   // runtime parameters (mass, damping, dt, world size)
 
 // Flag set by the SIGINT handler to request a clean shutdown
 static volatile sig_atomic_t running = 1;
@@ -23,24 +24,36 @@ static void handle_sigint(int sig)
     running = 0;
 }
 
-// Keep drone inside [0, SIM_WORLD_WIDTH] × [0, SIM_WORLD_HEIGHT]
-static void apply_world_bounds(DroneState *d)
+// Keep drone inside [0, world_width] × [0, world_height].
+// Also zero velocity components that point into the wall so we don't keep
+// bouncing or sliding along the boundary forever.
+static void apply_world_bounds(DroneState *d, double world_width, double world_height)
 {
     if (d->x < 0.0) {
         d->x = 0.0;
-        if (d->vx < 0.0) d->vx = 0.0;
-    } else if (d->x > SIM_WORLD_WIDTH) {
-        d->x = SIM_WORLD_WIDTH;
-        if (d->vx > 0.0) d->vx = 0.0;
+        if (d->vx < 0.0) d->vx = 0.0;      // kill velocity into left wall
+    } else if (d->x > world_width) {
+        d->x = world_width;
+        if (d->vx > 0.0) d->vx = 0.0;      // kill velocity into right wall
     }
 
     if (d->y < 0.0) {
         d->y = 0.0;
-        if (d->vy < 0.0) d->vy = 0.0;
-    } else if (d->y > SIM_WORLD_HEIGHT) {
-        d->y = SIM_WORLD_HEIGHT;
-        if (d->vy > 0.0) d->vy = 0.0;
+        if (d->vy < 0.0) d->vy = 0.0;      // kill velocity into bottom wall
+    } else if (d->y > world_height) {
+        d->y = world_height;
+        if (d->vy > 0.0) d->vy = 0.0;      // kill velocity into top wall
     }
+}
+
+// Zero out very small velocities so we don't get visual jitter from tiny
+// residual motion near equilibrium (especially near walls).
+static void apply_motion_deadzone(DroneState *d)
+{
+    const double V_EPS = 0.01;  // tweakable: "small enough" velocity
+
+    if (fabs(d->vx) < V_EPS) d->vx = 0.0;
+    if (fabs(d->vy) < V_EPS) d->vy = 0.0;
 }
 
 int main(int argc, char *argv[])
@@ -66,10 +79,12 @@ int main(int argc, char *argv[])
     int fd_cmd_in    = atoi(argv[SIM_ARG_DRONE_CMD_IN]);
     int fd_state_out = atoi(argv[SIM_ARG_DRONE_STATE_OUT]);
 
-    // Use dt, mass, damping from parameter file (or defaults)
-    const double dt      = params->dt;
-    const double mass    = params->mass;
-    const double damping = params->damping;
+    // Use dt, mass, damping and world size from parameter file (or defaults)
+    const double dt           = params->dt;
+    const double mass         = params->mass;
+    const double damping      = params->damping;
+    const double world_width  = (double)params->world_width;
+    const double world_height = (double)params->world_height;
 
     unsigned int sleep_us = (unsigned int)(dt * 1e6);
 
@@ -79,8 +94,9 @@ int main(int argc, char *argv[])
     DroneState   d;
     CommandState c;
 
-    d.x  = 0.0;
-    d.y  = 0.0;
+    // Start the drone at the center of the world
+    d.x  = world_width  / 2.0;
+    d.y  = world_height / 2.0;
     d.vx = 0.0;
     d.vy = 0.0;
 
@@ -123,8 +139,9 @@ int main(int argc, char *argv[])
                 }
 
                 if (reset_edge) {
-                    d.x  = 0.0;
-                    d.y  = 0.0;
+                    // Reset back to center of the world
+                    d.x  = world_width  / 2.0;
+                    d.y  = world_height / 2.0;
                     d.vx = 0.0;
                     d.vy = 0.0;
                 }
@@ -146,10 +163,13 @@ int main(int argc, char *argv[])
         d.vx += ax * dt;
         d.vy += ay * dt;
 
+        // Kill tiny velocities to avoid jitter when we're almost at rest
+        apply_motion_deadzone(&d);
+
         d.x  += d.vx * dt;
         d.y  += d.vy * dt;
 
-        apply_world_bounds(&d);
+        apply_world_bounds(&d, world_width, world_height);
 
         if (write_full(fd_state_out, &d, sizeof(d)) != (ssize_t)sizeof(d)) {
             perror("drone: write_full(fd_state_out)");

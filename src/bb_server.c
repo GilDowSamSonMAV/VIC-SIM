@@ -6,6 +6,8 @@
 #include <sys/select.h>
 #include <fcntl.h>
 #include <curses.h>
+#include <math.h>   
+#include <time.h>   
 
 #include "sim_types.h"
 #include "sim_ipc.h"
@@ -24,6 +26,294 @@ static void handle_sigint(int sig)
 {
     (void)sig;
     running = 0;
+}
+
+/*
+ * Latombe / Khatib-style repulsive force magnitude.
+ *
+ * distance       = distance to wall/obstacle (>= 0)
+ * function_scale = eta (params->eta)
+ * area_of_effect = rho0 (params->rho)
+ * vel_x, vel_y   = drone velocity components
+ *
+ * F_rep(d) = eta * (1/d - 1/rho0) * (1/d^2) * |v|
+ * only if 0 < d <= area_of_effect.
+ * Direction (sign) is handled by the caller.
+ */
+static double repulsive_force(double distance,
+                              double function_scale,
+                              double area_of_effect,
+                              double vel_x,
+                              double vel_y)
+{
+    if (function_scale <= 0.0 || area_of_effect <= 0.0) {
+        return 0.0;
+    }
+
+    // Avoid insane spikes and ignore outside radius
+    const double min_dist = 0.1;
+    if (distance <= min_dist || distance > area_of_effect) {
+        return 0.0;
+    }
+
+    double vel_mag = sqrt(vel_x * vel_x + vel_y * vel_y);
+    if (vel_mag <= 0.0) {
+        return 0.0;  // if we're not moving, no repulsion
+    }
+
+    double inv_d   = 1.0 / distance;
+    double inv_rho = 1.0 / area_of_effect;
+
+    double base = (inv_d - inv_rho) * inv_d * inv_d;  // (1/d - 1/rho)/d^2
+    if (base <= 0.0) {
+        return 0.0;
+    }
+
+    return function_scale * base * vel_mag;
+}
+
+/*
+ * Wall repulsion:
+ * - radius:   params->rho
+ * - strength: params->eta
+ *
+ * Same sign logic as the old project:
+ *  - LEFT wall:  +Fx
+ *  - RIGHT wall: -Fx
+ *  - BOTTOM:     +Fy
+ *  - TOP:        -Fy
+ * Magnitude from repulsive_force(), using full |v|.
+ */
+static void compute_wall_repulsion(const WorldState *world,
+                                   const SimParams   *params,
+                                   double            *out_fx,
+                                   double            *out_fy)
+{
+    double fx = 0.0;
+    double fy = 0.0;
+
+    double rho = params->rho;  // radius of influence
+    double eta = params->eta;  // strength
+
+    if (rho <= 0.0 || eta <= 0.0) {
+        *out_fx = 0.0;
+        *out_fy = 0.0;
+        return;
+    }
+
+    double x  = world->drone.x;
+    double y  = world->drone.y;
+    double vx = world->drone.vx;
+    double vy = world->drone.vy;
+
+    double w = (double)params->world_width;
+    double h = (double)params->world_height;
+
+    // LEFT wall (x = 0): distance = x, push +x
+    if (x < rho) {
+        double d = x;
+        double f = repulsive_force(d, eta, rho, vx, vy);
+        fx += f;
+    }
+
+    // RIGHT wall (x = w): distance = w - x, push -x
+    if (x > w - rho) {
+        double d = w - x;
+        double f = repulsive_force(d, eta, rho, vx, vy);
+        fx -= f;
+    }
+
+    // BOTTOM wall (y = 0): distance = y, push +y
+    if (y < rho) {
+        double d = y;
+        double f = repulsive_force(d, eta, rho, vx, vy);
+        fy += f;
+    }
+
+    // TOP wall (y = h): distance = h - y, push -y
+    if (y > h - rho) {
+        double d = h - y;
+        double f = repulsive_force(d, eta, rho, vx, vy);
+        fy -= f;
+    }
+
+    *out_fx = fx;
+    *out_fy = fy;
+}
+
+/*
+ * Obstacle repulsion:
+ * - same Latombe law, but vector points away from obstacle.
+ * - uses a slightly BIGGER radius than walls: rho_obs = 1.5 * rho
+ */
+static void compute_obstacle_repulsion(const WorldState *world,
+                                       const SimParams   *params,
+                                       double            *out_fx,
+                                       double            *out_fy)
+{
+    double fx = 0.0;
+    double fy = 0.0;
+
+    double rho     = params->rho;
+    double eta     = params->eta;
+    double rho_obs = rho * 1.5;   // obstacle radius (bigger than walls)
+
+    if (rho_obs <= 0.0 || eta <= 0.0) {
+        *out_fx = 0.0;
+        *out_fy = 0.0;
+        return;
+    }
+
+    double x  = world->drone.x;
+    double y  = world->drone.y;
+    double vx = world->drone.vx;
+    double vy = world->drone.vy;
+
+    for (int i = 0; i < world->num_obstacles; ++i) {
+        const Obstacle *obs = &world->obstacles[i];
+        if (!obs->active) {
+            continue;
+        }
+
+        double dx = obs->x - x;
+        double dy = obs->y - y;
+        double dist = sqrt(dx * dx + dy * dy);
+        if (dist <= 0.0 || dist > rho_obs) {
+            continue; // too far or invalid
+        }
+
+        double f_mag = repulsive_force(dist, eta, rho_obs, vx, vy);
+        if (f_mag <= 0.0) {
+            continue;
+        }
+
+        // Direction: AWAY from obstacle (from obstacle to drone).
+        double nx = x - obs->x;
+        double ny = y - obs->y;
+        double nlen = sqrt(nx * nx + ny * ny);
+        if (nlen <= 0.0) {
+            continue;
+        }
+
+        nx /= nlen;
+        ny /= nlen;
+
+        fx += f_mag * nx;
+        fy += f_mag * ny;
+    }
+
+    *out_fx = fx;
+    *out_fy = fy;
+}
+
+/*
+ * Helper: does the segment [x0,y0] -> [x1,y1] intersect
+ * the circle centered at (cx,cy) with radius r ?
+ *
+ * Returns 1 if yes, 0 otherwise.
+ */
+static int segment_hits_circle(double x0, double y0,
+                               double x1, double y1,
+                               double cx, double cy,
+                               double r)
+{
+    double r2 = r * r;
+
+    // Endpoint inside circle?
+    double dx0 = x0 - cx;
+    double dy0 = y0 - cy;
+    double dx1 = x1 - cx;
+    double dy1 = y1 - cy;
+
+    double dist0_sq = dx0 * dx0 + dy0 * dy0;
+    double dist1_sq = dx1 * dx1 + dy1 * dy1;
+
+    if (dist0_sq <= r2 || dist1_sq <= r2) {
+        return 1;
+    }
+
+    // Degenerate segment
+    double sx = x1 - x0;
+    double sy = y1 - y0;
+    double len2 = sx * sx + sy * sy;
+    if (len2 <= 1e-9) {
+        return 0;
+    }
+
+    // Projection of circle center onto segment
+    double t = ((cx - x0) * sx + (cy - y0) * sy) / len2;
+    if (t < 0.0) t = 0.0;
+    else if (t > 1.0) t = 1.0;
+
+    double closest_x = x0 + t * sx;
+    double closest_y = y0 + t * sy;
+
+    double dcx = closest_x - cx;
+    double dcy = closest_y - cy;
+    double dist_closest_sq = dcx * dcx + dcy * dcy;
+
+    return dist_closest_sq <= r2;
+}
+
+/*
+ * Target handling:
+ * - use segment [prev_pos -> current_pos] vs circle intersection
+ * - when hit: increase world->score, respawn target at random position
+ * - ignore frames where the drone basically didn't move (to avoid weird
+ *   initial hits / score jumps).
+ */
+static void handle_targets(WorldState *world,
+                           const SimParams *params,
+                           double prev_x,
+                           double prev_y)
+{
+    if (world->num_targets <= 0) {
+        return;
+    }
+
+    double x1 = world->drone.x;
+    double y1 = world->drone.y;
+
+    // If we didn't move, skip hit detection this frame
+    double move_dx = x1 - prev_x;
+    double move_dy = y1 - prev_y;
+    double move_sq = move_dx * move_dx + move_dy * move_dy;
+    if (move_sq < 1e-6) {
+        return;
+    }
+
+    // Hit radius in world coordinates (tweakable).
+    const double HIT_RADIUS = 1.0;
+
+    for (int i = 0; i < world->num_targets; ++i) {
+        Target *tgt = &world->targets[i];
+        if (!tgt->active) {
+            continue;
+        }
+
+        double cx = tgt->x;
+        double cy = tgt->y;
+
+        int hit = segment_hits_circle(prev_x, prev_y, x1, y1, cx, cy, HIT_RADIUS);
+
+        if (hit) {
+            world->score += 1.0;
+
+            sim_log_info("bb_server: TARGET HIT idx=%d pos=(%.2f,%.2f) score=%.1f",
+                         i, tgt->x, tgt->y, world->score);
+
+            // Respawn this target at a random location in the world
+            double w = (double)params->world_width;
+            double h = (double)params->world_height;
+
+            tgt->x = ((double)rand() / (double)RAND_MAX) * w;
+            tgt->y = ((double)rand() / (double)RAND_MAX) * h;
+            tgt->active = 1;
+
+            sim_log_info("bb_server: TARGET RESPAWN idx=%d new_pos=(%.2f,%.2f)",
+                         i, tgt->x, tgt->y);
+        }
+    }
 }
 
 int main(int argc, char *argv[])
@@ -76,6 +366,17 @@ int main(int argc, char *argv[])
                  params->damping,
                  params->dt);
 
+    // Log repulsion parameters as well
+    sim_log_info("bb_server: repulsion params rho=%.2f eta=%.2f",
+                 params->rho, params->eta);
+
+    int env_enabled = (params->rho > 0.0 && params->eta > 0.0);
+    sim_log_info("bb_server: repulsion %s (Latombe-style |v|)",
+                 env_enabled ? "ENABLED" : "DISABLED");
+
+    // Seed RNG for target respawn
+    srand((unsigned)time(NULL));
+
     // FDs for anonymous pipes are now passed via argv by master:
     //   ./bb_server <fd_drone_state_in> <fd_drone_cmd_out> <fd_input_cmd_in>
     //               <fd_obstacles_in> <fd_targets_in>
@@ -97,7 +398,8 @@ int main(int argc, char *argv[])
                  "input_in=%d obs_in=%d tgt_in=%d",
                  fd_drone_in, fd_drone_out, fd_input_in, fd_obs_in, fd_tgt_in);
 
-    WorldState world;
+    WorldState   world;
+    CommandState user_cmd;   // pure user command (raw input)
 
     // Initialize world state
     world.drone.x  = 0.0;
@@ -111,6 +413,8 @@ int main(int argc, char *argv[])
     world.cmd.reset    = 0;
     world.cmd.quit     = 0;
     world.cmd.last_key = 0;
+
+    user_cmd = world.cmd;
 
     world.num_obstacles = 0;
     for (int i = 0; i < SIM_MAX_OBSTACLES; ++i) {
@@ -132,6 +436,17 @@ int main(int argc, char *argv[])
     }
 
     world.score = 0.0;
+
+    // Track previous drone position for target hit tests
+    double prev_x           = 0.0;
+    double prev_y           = 0.0;
+    int    have_prev_pos    = 0;
+    int    have_drone_state = 0;
+    int    have_targets     = 0;
+
+    // For repulsion logic
+    int input_received   = 0;
+    int wall_active_prev = 0;
 
     // Init UI and show menu
     ui_init();
@@ -163,6 +478,10 @@ int main(int argc, char *argv[])
         sim_log_info("bb_server: exiting from menu");
         return 0;
     }
+
+    // Clear screen after menu so main UI has a clean canvas
+    erase();
+    refresh();
 
     sim_log_info("bb_server: entering main loop");
 
@@ -210,6 +529,8 @@ int main(int argc, char *argv[])
             break;
         }
 
+        input_received = 0;
+
         if (ready > 0) {
             // Data from drone (updated DroneState)
             if (FD_ISSET(fd_drone_in, &readfds)) {
@@ -217,7 +538,19 @@ int main(int argc, char *argv[])
                 ssize_t r = read_full(fd_drone_in, &ds, sizeof(ds));
 
                 if (r == (ssize_t)sizeof(ds)) {
-                    world.drone = ds;
+                    if (!have_prev_pos) {
+                        // First real state: no motion yet
+                        prev_x = ds.x;
+                        prev_y = ds.y;
+                        have_prev_pos = 1;
+                    } else {
+                        // Normal: prev = old position
+                        prev_x = world.drone.x;
+                        prev_y = world.drone.y;
+                    }
+
+                    world.drone      = ds;
+                    have_drone_state = 1;
                 } else if (r == 0) {
                     // EOF: drone closed its pipe
                     sim_log_info("bb_server: drone pipe EOF");
@@ -235,14 +568,20 @@ int main(int argc, char *argv[])
                 ssize_t r = read_full(fd_input_in, &cs, sizeof(cs));
 
                 if (r == (ssize_t)sizeof(cs)) {
-                    world.cmd = cs;
+                    user_cmd       = cs;
+                    input_received = 1;
 
-                    // Forward latest command to drone so it can update physics
-                    ssize_t w = write_full(fd_drone_out, &cs, sizeof(cs));
-                    if (w != (ssize_t)sizeof(cs)) {
-                        endwin();
-                        perror("bb_server: write_full(drone)");
-                        running = 0;
+                    if (!env_enabled) {
+                        // Legacy mode: just forward user command
+                        world.cmd = cs;
+
+                        // Forward latest command to drone so it can update physics
+                        ssize_t w = write_full(fd_drone_out, &cs, sizeof(cs));
+                        if (w != (ssize_t)sizeof(cs)) {
+                            endwin();
+                            perror("bb_server: write_full(drone)");
+                            running = 0;
+                        }
                     }
                 } else if (r == 0) {
                     sim_log_info("bb_server: input pipe EOF");
@@ -261,7 +600,13 @@ int main(int argc, char *argv[])
                                       (size_t)(obs_to_read * (int)sizeof(Obstacle)));
 
                 if (r == expected) {
-                    world.num_obstacles = obs_to_read;
+                    int count = 0;
+                    for (int i = 0; i < obs_to_read; ++i) {
+                        if (world.obstacles[i].active) {
+                            ++count;
+                        }
+                    }
+                    world.num_obstacles = count;
                 } else if (r == 0) {
                     sim_log_info("bb_server: obstacles pipe EOF");
                     // Keep last known obstacles, just don't expect more updates
@@ -280,7 +625,14 @@ int main(int argc, char *argv[])
                                       (size_t)(tgt_to_read * (int)sizeof(Target)));
 
                 if (r == expected) {
-                    world.num_targets = tgt_to_read;
+                    int count = 0;
+                    for (int i = 0; i < tgt_to_read; ++i) {
+                        if (world.targets[i].active) {
+                            ++count;
+                        }
+                    }
+                    world.num_targets = count;
+                    have_targets      = 1;
                 } else if (r == 0) {
                     sim_log_info("bb_server: targets pipe EOF");
                     tgt_to_read = 0;
@@ -289,6 +641,63 @@ int main(int argc, char *argv[])
                     perror("bb_server: read_full(targets)");
                     running = 0;
                 }
+            }
+        }
+
+        // Handle targets: collision detection, scoring, respawn
+        if (have_prev_pos && have_drone_state && have_targets) {
+            handle_targets(&world, params, prev_x, prev_y);
+        }
+
+        // Apply wall + obstacle repulsion if environment enabled
+        if (running && env_enabled) {
+            double fx_wall = 0.0, fy_wall = 0.0;
+            double fx_obs  = 0.0, fy_obs  = 0.0;
+
+            compute_wall_repulsion(&world, params, &fx_wall, &fy_wall);
+            compute_obstacle_repulsion(&world, params, &fx_obs, &fy_obs);
+
+            double fx_rep = fx_wall + fx_obs;
+            double fy_rep = fy_wall + fy_obs;
+
+            // Only send command if:
+            // 1. We received new user input, OR
+            // 2. Repulsive forces are active (near walls or obstacles)
+            if (input_received || fx_rep != 0.0 || fy_rep != 0.0) {
+                CommandState out_cmd = user_cmd;
+                int          rep_active = (fx_rep != 0.0 || fy_rep != 0.0);
+
+                if (rep_active) {
+                    // Superposition: user force + wall + obstacle repulsion
+                    out_cmd.fx = user_cmd.fx + fx_rep;
+                    out_cmd.fy = user_cmd.fy + fy_rep;
+                }
+
+                ssize_t w = write_full(fd_drone_out, &out_cmd, sizeof(out_cmd));
+                if (w != (ssize_t)sizeof(out_cmd)) {
+                    endwin();
+                    perror("bb_server: write_full(drone with repulsion)");
+                    running = 0;
+                }
+
+                world.cmd = out_cmd;
+
+                // Wall logging: only ON/OFF transitions (based on walls only)
+                int wall_active = (fx_wall != 0.0 || fy_wall != 0.0);
+                if (wall_active && !wall_active_prev) {
+                    sim_log_info("bb_server: WALL ON  pos=(%.1f,%.1f) "
+                                 "user=(%.2f,%.2f) wall=(%.2f,%.2f) "
+                                 "obs=(%.2f,%.2f) total=(%.2f,%.2f)",
+                                 world.drone.x, world.drone.y,
+                                 user_cmd.fx, user_cmd.fy,
+                                 fx_wall, fy_wall,
+                                 fx_obs, fy_obs,
+                                 out_cmd.fx, out_cmd.fy);
+                } else if (!wall_active && wall_active_prev) {
+                    sim_log_info("bb_server: WALL OFF pos=(%.1f,%.1f)",
+                                 world.drone.x, world.drone.y);
+                }
+                wall_active_prev = wall_active;
             }
         }
 

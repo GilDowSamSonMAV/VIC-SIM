@@ -27,8 +27,8 @@ static void layout_map_window(void)
     last_screen_h = H;
     last_screen_w = W;
 
-    // Reserve the first 4 rows for header / status lines
-    int header_rows = 4;
+    // Reserve the first 5 rows for header / status + legend
+    int header_rows = 5;
     int bottom_margin = 1;
 
     int wh = H - header_rows - bottom_margin;
@@ -148,6 +148,8 @@ static void show_instructions_internal(void)
         "This window shows the map, obstacles, and targets.",
         "Resize the terminal to see the window adjust.",
         "",
+        "Legend: '@' = drone, '#' = obstacle, '+' = target",
+        "",
         "Press any key to return to menu..."
     };
     int n_lines = (int)(sizeof(lines) / sizeof(lines[0]));
@@ -230,19 +232,25 @@ void ui_draw(const WorldState *world)
     if (py > H - 2) py = H - 2;
 
     // Status lines at the top of the main screen (rows 0..3)
-    mvprintw(0, 0, "x=%6.2f y=%6.2f  vx=%6.2f vy=%6.2f",
+    mvprintw(0, 0,
+             "x=%6.2f y=%6.2f  vx=%6.2f vy=%6.2f",
              world->drone.x, world->drone.y,
              world->drone.vx, world->drone.vy);
 
-    mvprintw(1, 0, "fx=%6.2f fy=%6.2f  brake=%d reset=%d quit=%d last_key=%d",
+    mvprintw(1, 0,
+             "fx=%6.2f fy=%6.2f  brake=%d reset=%d quit=%d last_key=%d",
              world->cmd.fx, world->cmd.fy,
              world->cmd.brake, world->cmd.reset,
              world->cmd.quit, world->cmd.last_key);
 
-    mvprintw(2, 0, "obstacles=%d targets=%d score=%6.2f",
+    mvprintw(2, 0,
+             "obstacles=%d targets=%d score=%6.2f",
              world->num_obstacles, world->num_targets, world->score);
 
-    mvprintw(3, 0, "Press 'Q' in INPUT window to quit");
+    mvprintw(3, 0,
+             "Legend: '@'=drone  '#'=obstacle  '+'=target   |   Press 'Q' in INPUT window to quit");
+
+    // row 4 is left empty as a visual spacer; map border starts at row 5
 
     // Draw obstacles as '#'
     for (int i = 0; i < world->num_obstacles; ++i) {

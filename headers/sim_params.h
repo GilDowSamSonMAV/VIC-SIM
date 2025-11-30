@@ -24,6 +24,7 @@
     - max_force: N (clamp magnitude)
     - rho: meters (perception distance for repulsion)
     - eta: N·m (repulsion gain)
+    - obstacle/target_spawn_interval: seconds between spawns
  */
 typedef struct {
     // World geometry (simulation coordinates)
@@ -43,9 +44,15 @@ typedef struct {
     double rho;
     double eta;
 
-    // Environment population
-    int    num_obstacles;
-    int    num_targets;
+    // Environment population (caps)
+    int    num_obstacles;   
+    int    num_targets;     
+
+    // Environment spawn control
+    int    initial_obstacles;        
+    int    initial_targets;         
+    double obstacle_spawn_interval; 
+    double target_spawn_interval;   
 } SimParams;
 
 /* 

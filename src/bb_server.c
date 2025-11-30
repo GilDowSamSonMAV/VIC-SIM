@@ -313,7 +313,7 @@ static void handle_targets(WorldState *world,
         int hit = segment_hits_circle(prev_x, prev_y, x1, y1, cx, cy, HIT_RADIUS);
 
         if (hit) {
-            play("target.mp3");
+            play("../../bin/conf/target.mp3");
             world->score += 1.0;
 
             sim_log_info("bb_server: TARGET HIT idx=%d pos=(%.2f,%.2f) score=%.1f",
@@ -352,7 +352,7 @@ int main(int argc, char *argv[])
         }
 
         // Try MP3 looping with mpg123 
-        execlp("mpg123", "mpg123", "-f", "4098", "--loop", "-1", "music.mp3", (char *)NULL);
+        execlp("mpg123", "mpg123", "-f", "4098", "--loop", "-1", "../../bin/conf/music.mp3", (char *)NULL);
 
       
         perror("Music!");

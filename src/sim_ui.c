@@ -128,17 +128,17 @@ static int show_menu_internal(void)
         ch = wgetch(menu_win);
         switch (ch) {
             case KEY_UP:    
-                play_sfx("scroll.mp3");
+                play_sfx("../../bin/conf/scroll.mp3");
                 if (choice > 0) choice--; 
                 break;
 
             case KEY_DOWN:  
-                play_sfx("scroll.mp3");
+                play_sfx("../../bin/conf/scroll.mp3");
                 if (choice < n_options - 1) choice++; 
                 break;
 
             case '\n':
-                play_sfx("select.mp3");
+                play_sfx("../../bin/conf/select.mp3");
                 delwin(menu_win);
                 return choice;
         }
@@ -191,7 +191,7 @@ static void show_instructions_internal(void)
 
     wrefresh(instr_win);
     wgetch(instr_win);
-    play_sfx("select.mp3");
+    play_sfx("../../bin/conf/select.mp3");
     delwin(instr_win);
 }
 

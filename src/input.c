@@ -178,43 +178,43 @@ int main(int argc, char *argv[])
 
         switch (ch) {
             case 'q': 
-                play_sfx("press.mp3");
+                play_sfx("../../bin/conf/press.mp3");
                 fx -= FORCE_STEP * INV_SQRT2; fy -= FORCE_STEP * INV_SQRT2; 
                 break;
             case 'e': 
-                play_sfx("press.mp3");
+                play_sfx("../../bin/conf/press.mp3");
                 fx += FORCE_STEP * INV_SQRT2; fy -= FORCE_STEP * INV_SQRT2; 
                 break;
             case 'z': 
-                play_sfx("press.mp3");
+                play_sfx("../../bin/conf/press.mp3");
                 fx -= FORCE_STEP * INV_SQRT2; fy += FORCE_STEP * INV_SQRT2; 
                 break;
             case 'c': 
-                play_sfx("press.mp3");
+                play_sfx("../../bin/conf/press.mp3");
                 fx += FORCE_STEP * INV_SQRT2; fy += FORCE_STEP * INV_SQRT2; 
                 break;
             case 'w': 
-                play_sfx("press.mp3");
+                play_sfx("../../bin/conf/press.mp3");
                 fy -= FORCE_STEP; 
                 break;
             case 'x': 
-                play_sfx("press.mp3");
+                play_sfx("../../bin/conf/press.mp3");
                 fy += FORCE_STEP; 
                 break;
             case 'a': 
-                play_sfx("press.mp3");
+                play_sfx("../../bin/conf/press.mp3");
                 fx -= FORCE_STEP; 
                 break;
             case 'd': 
-                play_sfx("press.mp3");
+                play_sfx("../../bin/conf/press.mp3");
                 fx += FORCE_STEP; 
                 break;
             case 's':
             case ' ':
-                play_sfx("stop.mp3");
+                play_sfx("../../bin/conf/stop.mp3");
                 fx = 0.0; fy = 0.0; cmd.brake = 1; break;
             case 'r':
-                play_sfx("reset.mp3");
+                play_sfx("../../bin/conf/reset.mp3");
                 cmd.reset = 1; fx = 0.0; fy = 0.0; break;
             case 'Q':
                 cmd.quit  = 1;

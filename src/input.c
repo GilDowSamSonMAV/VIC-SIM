@@ -16,6 +16,23 @@
 // Flag set by the SIGINT handler to request a clean shutdown
 static volatile sig_atomic_t running = 1;
 
+// to play the music
+void play_sfx(const char *filename) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        int fd = open("/dev/null", O_RDWR);
+        if (fd >= 0) {
+            dup2(fd, STDIN_FILENO);
+            dup2(fd, STDOUT_FILENO);
+            dup2(fd, STDERR_FILENO);
+            if (fd > 2) close(fd);
+        }
+
+        execlp("mpg123", "mpg123", "-q", filename, (char *)NULL);
+        _exit(1);
+    }
+}
+
 // Async-signal-safe SIGINT handler: just flip the running flag
 static void handle_sigint(int sig)
 {
@@ -160,18 +177,44 @@ int main(int argc, char *argv[])
         double fy = cmd.fy;
 
         switch (ch) {
-            case 'q': fx -= FORCE_STEP * INV_SQRT2; fy -= FORCE_STEP * INV_SQRT2; break;
-            case 'e': fx += FORCE_STEP * INV_SQRT2; fy -= FORCE_STEP * INV_SQRT2; break;
-            case 'z': fx -= FORCE_STEP * INV_SQRT2; fy += FORCE_STEP * INV_SQRT2; break;
-            case 'c': fx += FORCE_STEP * INV_SQRT2; fy += FORCE_STEP * INV_SQRT2; break;
-            case 'w': fy -= FORCE_STEP; break;
-            case 'x': fy += FORCE_STEP; break;
-            case 'a': fx -= FORCE_STEP; break;
-            case 'd': fx += FORCE_STEP; break;
+            case 'q': 
+                play_sfx("press.mp3");
+                fx -= FORCE_STEP * INV_SQRT2; fy -= FORCE_STEP * INV_SQRT2; 
+                break;
+            case 'e': 
+                play_sfx("press.mp3");
+                fx += FORCE_STEP * INV_SQRT2; fy -= FORCE_STEP * INV_SQRT2; 
+                break;
+            case 'z': 
+                play_sfx("press.mp3");
+                fx -= FORCE_STEP * INV_SQRT2; fy += FORCE_STEP * INV_SQRT2; 
+                break;
+            case 'c': 
+                play_sfx("press.mp3");
+                fx += FORCE_STEP * INV_SQRT2; fy += FORCE_STEP * INV_SQRT2; 
+                break;
+            case 'w': 
+                play_sfx("press.mp3");
+                fy -= FORCE_STEP; 
+                break;
+            case 'x': 
+                play_sfx("press.mp3");
+                fy += FORCE_STEP; 
+                break;
+            case 'a': 
+                play_sfx("press.mp3");
+                fx -= FORCE_STEP; 
+                break;
+            case 'd': 
+                play_sfx("press.mp3");
+                fx += FORCE_STEP; 
+                break;
             case 's':
             case ' ':
+                play_sfx("stop.mp3");
                 fx = 0.0; fy = 0.0; cmd.brake = 1; break;
             case 'r':
+                play_sfx("reset.mp3");
                 cmd.reset = 1; fx = 0.0; fy = 0.0; break;
             case 'Q':
                 cmd.quit  = 1;

@@ -21,6 +21,22 @@
 // without introducing race conditions. 
 static volatile sig_atomic_t running = 1; 
 
+void play(const char *filename) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        int fd = open("/dev/null", O_RDWR);
+        if (fd >= 0) {
+            dup2(fd, STDIN_FILENO);
+            dup2(fd, STDOUT_FILENO);
+            dup2(fd, STDERR_FILENO);
+            if (fd > 2) close(fd);
+        }
+
+        execlp("mpg123", "mpg123", "-q", filename, (char *)NULL);
+        _exit(1);
+    }
+}
+
 // Async-signal-safe SIGINT handler: just flip the running flag
 static void handle_sigint(int sig)
 {
@@ -297,6 +313,7 @@ static void handle_targets(WorldState *world,
         int hit = segment_hits_circle(prev_x, prev_y, x1, y1, cx, cy, HIT_RADIUS);
 
         if (hit) {
+            play("target.mp3");
             world->score += 1.0;
 
             sim_log_info("bb_server: TARGET HIT idx=%d pos=(%.2f,%.2f) score=%.1f",
@@ -335,14 +352,9 @@ int main(int argc, char *argv[])
         }
 
         // Try MP3 looping with mpg123 
-        execlp("mpg123", "mpg123", "q", "--loop", "-1", "music.mp3", (char *)NULL);
+        execlp("mpg123", "mpg123", "-f", "4098", "--loop", "-1", "music.mp3", (char *)NULL);
 
-        // Fallback: try WAV looping 
-        execlp("bash", "bash", "-c",
-               "while true; do paplay music.wav || aplay music.wav; done",
-               (char *)NULL);
-
-        // if both of them fail we call perror and exit
+      
         perror("Music!");
         _exit(1);  
     } 

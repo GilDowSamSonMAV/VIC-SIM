@@ -2,6 +2,10 @@
 #include <locale.h>
 #include <ncurses.h>
 #include <string.h>
+#include <unistd.h>  
+#include <sys/types.h> 
+#include <fcntl.h>      
+#include <stdlib.h>     
 
 #include "sim_ui.h"
 #include "sim_const.h"
@@ -13,6 +17,23 @@ static WINDOW *map_win = NULL;
 // Track last screen size to avoid unnecessary resizes
 static int last_screen_h = 0;
 static int last_screen_w = 0;
+
+// to play the music
+void play_sfx(const char *filename) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        int fd = open("/dev/null", O_RDWR);
+        if (fd >= 0) {
+            dup2(fd, STDIN_FILENO);
+            dup2(fd, STDOUT_FILENO);
+            dup2(fd, STDERR_FILENO);
+            if (fd > 2) close(fd);
+        }
+
+        execlp("mpg123", "mpg123", "-q", filename, (char *)NULL);
+        _exit(1);
+    }
+}
 
 // Compute map window size/position and create/resize it if needed
 static void layout_map_window(void)
@@ -106,9 +127,18 @@ static int show_menu_internal(void)
 
         ch = wgetch(menu_win);
         switch (ch) {
-            case KEY_UP:    if (choice > 0) choice--; break;
-            case KEY_DOWN:  if (choice < n_options - 1) choice++; break;
+            case KEY_UP:    
+                play_sfx("scroll.mp3");
+                if (choice > 0) choice--; 
+                break;
+
+            case KEY_DOWN:  
+                play_sfx("scroll.mp3");
+                if (choice < n_options - 1) choice++; 
+                break;
+
             case '\n':
+                play_sfx("select.mp3");
                 delwin(menu_win);
                 return choice;
         }
@@ -161,6 +191,7 @@ static void show_instructions_internal(void)
 
     wrefresh(instr_win);
     wgetch(instr_win);
+    play_sfx("select.mp3");
     delwin(instr_win);
 }
 

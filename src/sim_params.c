@@ -15,7 +15,7 @@ static int g_params_initialized = 0;
 // Fill g_params with factory defaults from sim_const.h
 static void sim_params_init_defaults(void)
 {
-    // World size from sim_const.h (cast double -> int for SimParams)
+    // World size from sim_const.h
     g_params.world_width  = (int)SIM_WORLD_WIDTH;
     g_params.world_height = (int)SIM_WORLD_HEIGHT;
 
@@ -32,9 +32,15 @@ static void sim_params_init_defaults(void)
     g_params.rho = SIM_DEFAULT_RHO;
     g_params.eta = SIM_DEFAULT_ETA;
 
-    // Environment population
+    // Environment population (caps)
     g_params.num_obstacles = SIM_DEFAULT_NUM_OBSTACLES;
-    g_params.num_targets   = SIM_DEFAULT_NUM_TARGETS;
+    g_params.num_targets   = SIM_DEFAULT_NUM_TARGETS;   
+
+    // Environment spawn control
+    g_params.initial_obstacles       = SIM_DEFAULT_INITIAL_OBSTACLES;      
+    g_params.initial_targets         = SIM_DEFAULT_INITIAL_TARGETS;         
+    g_params.obstacle_spawn_interval = SIM_DEFAULT_OBSTACLE_SPAWN_INTERVAL; 
+    g_params.target_spawn_interval   = SIM_DEFAULT_TARGET_SPAWN_INTERVAL;   
 
     g_params_initialized = 1;
 }
@@ -85,20 +91,42 @@ int sim_params_load(const char *path)
             g_params.world_width = (int)strtol(value, NULL, 10);
         } else if (strcmp(key, "world_height") == 0 || strcmp(key, "height") == 0) {
             g_params.world_height = (int)strtol(value, NULL, 10);
+
+        // Environment caps (max counts)
         } else if (strcmp(key, "num_obstacles") == 0 || strcmp(key, "obstacles") == 0) {
-            g_params.num_obstacles = (int)strtol(value, NULL, 10);
+            g_params.num_obstacles = (int)strtol(value, NULL, 10); // legacy name kept for compatibility
         } else if (strcmp(key, "num_targets") == 0 || strcmp(key, "targets") == 0) {
             g_params.num_targets = (int)strtol(value, NULL, 10);
+        } else if (strcmp(key, "max_obstacles") == 0) {
+            g_params.num_obstacles = (int)strtol(value, NULL, 10); // explicit max name
+        } else if (strcmp(key, "max_targets") == 0) {
+            g_params.num_targets = (int)strtol(value, NULL, 10);
+
+        // Environment spawn control
+        } else if (strcmp(key, "initial_obstacles") == 0) {
+            g_params.initial_obstacles = (int)strtol(value, NULL, 10);
+        } else if (strcmp(key, "initial_targets") == 0) {
+            g_params.initial_targets = (int)strtol(value, NULL, 10);
+        } else if (strcmp(key, "obstacle_spawn_interval") == 0) {
+            g_params.obstacle_spawn_interval = strtod(value, NULL);
+        } else if (strcmp(key, "target_spawn_interval") == 0) {
+            g_params.target_spawn_interval = strtod(value, NULL);
+
+        // Drone dynamics
         } else if (strcmp(key, "mass") == 0) {
             g_params.mass = strtod(value, NULL);
         } else if (strcmp(key, "damping") == 0 || strcmp(key, "coefficient") == 0) {
             g_params.damping = strtod(value, NULL);
         } else if (strcmp(key, "dt") == 0 || strcmp(key, "refresh") == 0) {
             g_params.dt = strtod(value, NULL);
+
+        // User command forces
         } else if (strcmp(key, "force_step") == 0) {
             g_params.force_step = strtod(value, NULL);
         } else if (strcmp(key, "max_force") == 0) {
             g_params.max_force = strtod(value, NULL);
+
+        // Potential-field repulsion
         } else if (strcmp(key, "rho") == 0 || strcmp(key, "radius") == 0) {
             g_params.rho = strtod(value, NULL);
         } else if (strcmp(key, "eta") == 0) {
@@ -108,6 +136,33 @@ int sim_params_load(const char *path)
     }
 
     fclose(fp);
+
+    // Small sanity checks so obviously broken configs don't explode too hard
+    if (g_params.num_obstacles < 0) {
+        g_params.num_obstacles = 0; 
+    }
+    if (g_params.num_targets < 0) {
+        g_params.num_targets = 0;
+    }
+    if (g_params.initial_obstacles < 0) {
+        g_params.initial_obstacles = 0;
+    }
+    if (g_params.initial_targets < 0) {
+        g_params.initial_targets = 0;
+    }
+    if (g_params.initial_obstacles > g_params.num_obstacles) {
+        g_params.initial_obstacles = g_params.num_obstacles; 
+    }
+    if (g_params.initial_targets > g_params.num_targets) {
+        g_params.initial_targets = g_params.num_targets;
+    }
+    if (g_params.obstacle_spawn_interval <= 0.0) {
+        g_params.obstacle_spawn_interval = SIM_DEFAULT_OBSTACLE_SPAWN_INTERVAL; 
+    }
+    if (g_params.target_spawn_interval <= 0.0) {
+        g_params.target_spawn_interval = SIM_DEFAULT_TARGET_SPAWN_INTERVAL;
+    }
+
     return 0;
 }
 

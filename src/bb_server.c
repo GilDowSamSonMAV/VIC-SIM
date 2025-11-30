@@ -31,6 +31,33 @@ int main(int argc, char *argv[])
     sim_log_init("bb_server");
     signal(SIGINT, handle_sigint);
 
+    // we add the music
+    pid_t music = fork();
+
+    if (music == 0) {
+        // Detach completely
+        int fd = open("/dev/null", O_RDWR);
+        if (fd >= 0) {
+            dup2(fd, STDIN_FILENO);
+            dup2(fd, STDOUT_FILENO);
+            dup2(fd, STDERR_FILENO);
+            if (fd > 2) close(fd);
+        }
+
+        // Try MP3 looping with mpg123 
+        execlp("mpg123", "mpg123", "q", "--loop", "-1", "music.mp3", (char *)NULL);
+
+        // Fallback: try WAV looping 
+        execlp("bash", "bash", "-c",
+               "while true; do paplay music.wav || aplay music.wav; done",
+               (char *)NULL);
+
+        // if both of them fail we call perror and exit
+        perror("Music!");
+        _exit(1);  
+    } 
+
+
     // Load parameters in this process (master's load does not carry across exec)
     if (sim_params_load(NULL) != 0) {
         sim_log_info("bb_server: could not load '%s', using built-in defaults",

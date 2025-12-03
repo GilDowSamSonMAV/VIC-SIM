@@ -34,7 +34,7 @@ foreach(target ${SIM_EXECUTABLES})
     target_link_libraries(${target}
         PRIVATE
             sim_core
-            sim_ui        # technically only bb_server/master need this, but it's not wrong
+            sim_ui       
             sim_headers
             m
             ncurses

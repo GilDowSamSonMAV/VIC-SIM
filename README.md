@@ -560,5 +560,5 @@ This includes:
 Checkout command:
 
 ```bash
-git checkout nowhere :). If you are reading this it means you are at the most updated version of our project.
+git checkout nowhere :) If you are reading this it means you are at the most updated version of our project.
 ```

@@ -131,9 +131,6 @@ The active components of this project are:
 All of them load the same runtime parameters from `bin/conf/drone_parameters.conf` and log to their own file in `bin/log/`.
 
 ### master.c
-
-Role:
-
 - entry point of the system
 - creates all anonymous pipes:
     - `pipe_drone_cmd` (bb_server to drone)
@@ -148,9 +145,6 @@ Role:
 - closes all unused pipe ends and waits for children to exit
 
 ### bb_server
-
-Role:
-
 - owns the authoritative world state:
     - `DroneState`
     - current `CommandState`
@@ -169,9 +163,6 @@ Role:
     - plays looping background music via `mpg123` in a detached child process
 
 ### drone
-
-Role:
-
 - simulates the drone as a 2D point mass with damping
 - receives `CommandState` from `bb_server` (user forces combined with repulsion)
 - integrates dynamics and enforces:
@@ -180,9 +171,6 @@ Role:
 - sends updated `DroneState` to `bb_server`
 
 ### input
-
-Role:
-
 - `ncurses` control pad for the user
 - maps key presses to forces and control flags:
   - directional forces 
@@ -192,9 +180,6 @@ Role:
   - plays sound effects for press, stop, reset, scroll and select actions
 
 ### obstacles
-
-Role:
-
 - maintains a dynamic set of obstacles in the world
 - respects:
     - `max_obstacles`   
@@ -207,9 +192,6 @@ Role:
     - sends the full `Obstacle[]` array to `bb_server`
 
 ### targets
-
-Role:
-
 - maintains a dynamic set of targets in the world
 - respects:
     - `max_targets` (hard cap)

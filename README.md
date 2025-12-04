@@ -257,7 +257,7 @@ where:
 
 `drone.c` integrates this system with explicit Euler. 
 
-- world bounds are: $`\[0, world\_ width] \times [0, world\_ height]`$
+- world bounds are: $`[0, world\_ width] \times [0, world\_ height]`$
 
 
 - when hitting a wall:

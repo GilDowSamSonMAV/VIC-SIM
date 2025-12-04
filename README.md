@@ -57,7 +57,7 @@ This repository contains the implementation for the first ARP course assignment:
 
 # POSIX Drone Simulator in action 
 
-[Video Demo](https://www.youtube.com/@renatozaccaria/videos?app=desktop&view=0&sort=dd&shelf_id=0)
+[Video Demo](https://youtu.be/tNpgaJHzdXw?si=1cfWcafKvvoCbWzo)
 
 ![Nice pic](files/image.png)
 
@@ -93,6 +93,8 @@ From the project root:
 ## How does it work
 
 ### Architecture
+
+![Archtecture Schema](files/Architecture.png)
 
 At runtime, the simulator consists of:
 
@@ -255,11 +257,7 @@ where:
 
 `drone.c` integrates this system with explicit Euler. 
 
-- world bounds are
-
-[0,world_width]×[0,world_height][0, \text{world\_width}] \times [0, \text{world\_height}]
-
-[0,world_width]×[0,world_height]
+- world bounds are: $$[0, \text{world\_width}] \times [0, \text{world\_height}]$$
 
 - when hitting a wall:
     - position is clamped
@@ -278,11 +276,8 @@ Parameters from the configuration file:
 On each directional key press:
 
 - `fx` and `fy` are incremented or decremented
-- values are clamped to the interval
+- values are clamped to the interval: $$[-\text{max\_force}, \text{max\_force}]$$
 
-[−max_force,max_force][-\text{max\_force}, \text{max\_force}]
-
-[−max_force,max_force]
 
 - `last_key` is updated
 - the new `CommandState` is sent to `bb_server`
@@ -335,8 +330,7 @@ $$
 F_{\text{rep}}(d) =
 \begin{cases}
 \eta \left( \dfrac{1}{d} - \dfrac{1}{\rho_0} \right) \dfrac{1}{d^2} \lVert v \rVert, & 0 < d \le \rho_0 \\
-0, & \text{otherwise}
-\end{cases}
+0\end{cases}
 $$
 
 where:
@@ -346,7 +340,7 @@ where:
     - `rho` for walls
     - `rho_obs` for obstacles, defined as
 
-ρobs=1.5 ρ\rho_{\text{obs}} = 1.5 \, \rho
+ρobs=1.5 $$ρ\rho_{\text{obs}} = 1.5 \, \rho$$
 
 ρobs=1.5ρ
 
@@ -489,7 +483,7 @@ git checkout 77648a1cb12b59886fa7446f9a6f5bcb470e78c7
 
 ```
 
-### Phase_Migration_2
+### Phase Migration - 2
 
 Goal: move from named pipes to unnamed pipes, which is the final IPC target of the assignment.
 

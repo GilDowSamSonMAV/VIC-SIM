@@ -64,10 +64,10 @@ This repository contains the implementation for the first ARP course assignment:
 # Beloved Contributors
 
 <a href="https://github.com/Cb-dotcom/posix-drone-sim/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Cb-dotcom/posix-drone-sim" alt="Contributors" />
+  <img src="https://contrib.rocks/image?repo=Cb-dotcom/posix-drone-sim&branch=main&v=3" alt="Contributors" />
 </a>
-<br>
-<br>
+<br><br>
+
 
 # Detailed Description
 

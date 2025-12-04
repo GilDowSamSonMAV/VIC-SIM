@@ -276,7 +276,7 @@ Parameters from the configuration file:
 On each directional key press:
 
 - `fx` and `fy` are incremented or decremented
-- values are clamped to the interval: $$[-\text{max\_force}, \text{max\_force}]$$
+- values are clamped to the interval: $$[\text{-max\_force}, \text{max\_force}]$$
 
 
 - `last_key` is updated

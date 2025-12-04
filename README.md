@@ -257,7 +257,8 @@ where:
 
 `drone.c` integrates this system with explicit Euler. 
 
-- world bounds are: $$[0, \text{world\_width}] \times [0, \text{world\_height}]$$
+- world bounds are: $$[0, world\_width] \times [0, world\_height]$$
+
 
 - when hitting a wall:
     - position is clamped
@@ -276,7 +277,7 @@ Parameters from the configuration file:
 On each directional key press:
 
 - `fx` and `fy` are incremented or decremented
-- values are clamped to the interval: $$[\text{-max\_force}, \text{max\_force}]$$
+- values are clamped to the interval: $$[{-max\_force}, {max\_force}]$$
 
 
 - `last_key` is updated

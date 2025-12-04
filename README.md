@@ -339,7 +339,7 @@ where:
 - `d` is the distance from the drone to the wall or obstacle
 - `rho_0` is:
     - `rho` for walls
-    - `rho_obs` for obstacles, defined as: ρ_(obs) = 1.5
+    - `rho_obs` for obstacles, defined as: ρ_obs = 1.5
 
 - `eta` is the repulsion gain
 - `v` is the velocity of the drone and `\lVert v \rVert` is its magnitude

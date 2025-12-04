@@ -341,9 +341,8 @@ where:
     - `rho` for walls
     - `rho_obs` for obstacles, defined as: ρ_obs=1.5
 
-$$ \begin{cases}
-\le \rho_obs = \text(1.5)
-\end{cases}
+$$
+\rho_\text{obs} = \text{1.5}
 $$
 
 - `eta` is the repulsion gain
